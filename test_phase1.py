@@ -1,4 +1,3 @@
-# test_suite.py
 import os
 import django
 from dotenv import load_dotenv
