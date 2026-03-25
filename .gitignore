@@ -214,3 +214,11 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ChromaDB local data
+chroma_db/
+*.parquet
+*.bin
+
+# LangChain / LangGraph logs
+.langgraph/
