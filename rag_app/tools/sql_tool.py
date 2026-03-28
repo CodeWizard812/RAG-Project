@@ -1,14 +1,23 @@
 import os
+import logging
 from dotenv import load_dotenv
+from pydantic import BaseModel, Field
+from langchain_core.tools import StructuredTool
 from langchain_community.utilities import SQLDatabase
-from langchain_classic.chains import create_sql_query_chain
-from langchain_core.tools import Tool
 
 load_dotenv()
+logger = logging.getLogger(__name__)
+
+
+class SQLQueryInput(BaseModel):
+    """
+    Explicit input schema — forces Gemini to always use the parameter
+    name 'query' instead of inventing arbitrary names like 'arg1' or 'ayudará'.
+    """
+    query: str = Field(description="Natural language question about financial data.")
 
 
 def _build_db_url() -> str:
-    """Constructs the PostgreSQL connection URL from environment variables."""
     return (
         f"postgresql://{os.getenv('DB_USER', 'postgres')}:"
         f"{os.getenv('DB_PASSWORD', 'yourpassword')}@"
@@ -18,57 +27,103 @@ def _build_db_url() -> str:
     )
 
 
-def get_sql_tool() -> Tool:
+def get_sql_tool() -> StructuredTool:
     """
-    Builds and returns a LangChain Tool that translates a natural language
-    question into SQL, executes it against PostgreSQL, and returns the result.
-
-    The tool is scoped exclusively to the rag_app_company and
-    rag_app_quarterlyfinancials tables to prevent unintended data access.
+    Returns a StructuredTool that translates a natural language question
+    into SQL, executes it against PostgreSQL, and returns the result.
+    Scoped exclusively to rag_app_company and rag_app_quarterlyfinancials.
     """
-    # Lazily import get_llm here to avoid circular imports at module load time
     from rag_app.utils.llm_factory import get_llm
 
     db = SQLDatabase.from_uri(
         _build_db_url(),
         include_tables=["rag_app_company", "rag_app_quarterlyfinancials"],
-        sample_rows_in_table_info=2,    # Helps the LLM understand column types
+        sample_rows_in_table_info=2,
     )
 
-    llm         = get_llm(temperature=0.0)
-    sql_chain   = create_sql_query_chain(llm, db)
+    # Get table schema once at startup — pass it explicitly in every prompt
+    # so Gemini never has to guess column names
+    table_info = db.get_table_info()
+    llm = get_llm(temperature=0.0)
 
-    def run_sql_query(question: str) -> str:
-        """
-        Converts the natural language question to SQL, runs it, and
-        returns the raw result string. Handles errors gracefully.
-        """
+    def run_sql_query(query: str) -> str:
+        """Converts NL question to SQL, runs it, returns results."""
         try:
-            raw_sql = sql_chain.invoke({"question": question})
+            # Ask Gemini to write the SQL using the exact schema we provide.
+            # We structure this as a plain invoke() — no chain, full control.
+            sql_prompt = f"""You are a PostgreSQL expert. Given the table schemas below, \
+write a single valid PostgreSQL SELECT query to answer the question.
 
-            # Gemini sometimes wraps SQL in markdown code fences — strip them
+RULES:
+- Output ONLY the raw SQL query. No markdown, no backticks, no explanation.
+- Use only the tables and columns defined in the schema below.
+- Always use table aliases for clarity.
+- For financial figures, use the exact column names from the schema.
+- Use ILIKE for company name matching (case-insensitive).
+
+TABLE SCHEMA:
+{table_info}
+
+QUESTION: {query}
+
+SQL QUERY:"""
+
+            response = llm.invoke(sql_prompt)
+
+            # Extract text from Gemini's response (handles both string and block formats)
+            raw_sql = _extract_text(response.content)
+
+            # Strip any accidental markdown fences Gemini might add
             clean_sql = (
-                raw_sql
-                .strip()
-                .removeprefix("```sql").removeprefix("```")
+                raw_sql.strip()
+                .removeprefix("```sql").removeprefix("```postgresql").removeprefix("```")
                 .removesuffix("```")
                 .strip()
             )
 
+            logger.info(f"[SQL Tool] Generated SQL: {clean_sql}")
+
+            if not clean_sql.upper().startswith("SELECT"):
+                return f"Generated query was not a SELECT statement. Got: {clean_sql[:100]}"
+
             result = db.run(clean_sql)
+            logger.info(f"[SQL Tool] Result: {str(result)[:200]}")
             return result if result else "Query returned no results."
 
         except Exception as e:
+            logger.exception("[SQL Tool] Error executing query")
             return f"SQL tool error: {str(e)}"
 
-    return Tool(
-        name="financial_database_query",
+    return StructuredTool.from_function(
         func=run_sql_query,
+        name="financial_database_query",
         description=(
-            "Use this tool to answer questions about hard financial metrics, revenue, debt, "
-            "and company-specific quantitative data. Input should be a natural language question. "
+            "Use this tool to answer questions about hard financial metrics: revenue, "
+            "net income, operating expenses, debt-to-equity ratios, market capitalisation, "
+            "and company-specific quantitative data. "
             "Examples: 'What was ATHR revenue in Q2 2025?', "
-            "'Which company has the highest debt-to-equity ratio?', "
-            "'Show net income trend for GRHE across all quarters.'"
+            "'Which company has the highest D/E ratio?', "
+            "'Show GRHE net income across all quarters.'"
         ),
+        args_schema=SQLQueryInput,
     )
+
+
+def _extract_text(content) -> str:
+    """
+    Safely extracts plain text from Gemini's response content.
+    Handles: plain string, list of content blocks, or single block dict.
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                parts.append(block.get("text", ""))
+            elif isinstance(block, str):
+                parts.append(block)
+        return " ".join(parts)
+    if isinstance(content, dict) and content.get("type") == "text":
+        return content.get("text", "")
+    return str(content)

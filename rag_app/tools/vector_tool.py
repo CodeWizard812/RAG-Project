@@ -1,19 +1,28 @@
-import os
+import logging
 import chromadb
 from chromadb.utils import embedding_functions
-from langchain_core.tools import Tool
+from pydantic import BaseModel, Field
+from langchain_core.tools import StructuredTool
 from dotenv import load_dotenv
 
 load_dotenv()
+logger = logging.getLogger(__name__)
 
-CHROMA_PATH      = "./chroma_store"
-COLLECTION_NAME  = "financial_regulatory_kb"
-EMBEDDING_MODEL  = "all-MiniLM-L6-v2"
-TOP_K_RESULTS    = 3
+CHROMA_PATH     = "./chroma_store"
+COLLECTION_NAME = "financial_regulatory_kb"
+EMBEDDING_MODEL = "all-MiniLM-L6-v2"
+TOP_K_RESULTS   = 3
+
+
+class VectorQueryInput(BaseModel):
+    """
+    Explicit input schema — locks parameter name to 'query' so Gemini
+    never invents arbitrary names.
+    """
+    query: str = Field(description="Natural language question about regulations or strategy.")
 
 
 def _get_collection():
-    """Returns the ChromaDB collection with the SentenceTransformer embedding function."""
     client = chromadb.PersistentClient(path=CHROMA_PATH)
     ef = embedding_functions.SentenceTransformerEmbeddingFunction(
         model_name=EMBEDDING_MODEL
@@ -25,19 +34,15 @@ def _get_collection():
     )
 
 
-def get_vector_tool() -> Tool:
+def get_vector_tool() -> StructuredTool:
     """
-    Builds and returns a LangChain Tool that performs semantic similarity
-    search over the ChromaDB financial & regulatory knowledge base.
-    Returns the top 3 relevant document snippets concatenated as a string.
+    Returns a StructuredTool that performs cosine-similarity search over
+    the ChromaDB financial & regulatory knowledge base.
+    Returns the top 3 relevant document snippets as a formatted string.
     """
     collection = _get_collection()
 
     def search_knowledge_base(query: str) -> str:
-        """
-        Performs cosine-similarity search and returns the top-K document
-        snippets along with their source metadata.
-        """
         try:
             results = collection.query(
                 query_texts=[query],
@@ -52,14 +57,13 @@ def get_vector_tool() -> Tool:
             if not documents:
                 return "No relevant documents found in the knowledge base."
 
-            # Format each result with its source metadata
-            formatted_snippets = []
+            snippets = []
             for i, (doc, meta, dist) in enumerate(
                 zip(documents, metadatas, distances), start=1
             ):
                 similarity_pct = round((1 - dist) * 100, 1)
-                source   = meta.get("source",        "Unknown Source")
-                category = meta.get("category",      "Unknown Category")
+                source   = meta.get("source", "Unknown Source")
+                category = meta.get("category", "Unknown Category")
                 doc_type = meta.get("document_type", "")
 
                 header = (
@@ -67,22 +71,25 @@ def get_vector_tool() -> Tool:
                     f"Relevance: {similarity_pct}%]\n"
                     f"Source: {source}"
                 )
-                formatted_snippets.append(f"{header}\n\n{doc.strip()}")
+                snippets.append(f"{header}\n\n{doc.strip()}")
 
-            return "\n\n" + ("\n\n" + "─" * 60 + "\n\n").join(formatted_snippets)
+            separator = "\n\n" + "─" * 60 + "\n\n"
+            return "\n\n" + separator.join(snippets)
 
         except Exception as e:
+            logger.exception("[Vector Tool] Error during similarity search")
             return f"Vector tool error: {str(e)}"
 
-    return Tool(
-        name="regulatory_knowledge_search",
+    return StructuredTool.from_function(
         func=search_knowledge_base,
+        name="regulatory_knowledge_search",
         description=(
-            "Use this tool for qualitative analysis, regulatory compliance, SEBI guidelines, "
-            "and understanding risks or strategy mentioned in earnings transcripts. "
-            "Examples: 'What are the SEBI D/E ratio limits for tech companies?', "
+            "Use this tool for qualitative analysis: SEBI regulatory guidelines, "
+            "disclosure requirements, ESG mandates, and insights from earnings transcripts "
+            "(strategic pivots, management commentary, forward guidance). "
+            "Examples: 'What are SEBI D/E limits for tech companies?', "
             "'What did Aether Technologies say about their AI strategy?', "
-            "'What ESG disclosures are required for large-cap companies?', "
-            "'Is GreenHorizon eligible for institutional investment?'"
+            "'What ESG disclosures are required for large-cap companies?'"
         ),
+        args_schema=VectorQueryInput,
     )
