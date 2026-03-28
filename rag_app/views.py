@@ -1,8 +1,14 @@
 import os
 import logging
+import json
+import tempfile
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
+from rag_app.serializers import IngestRequestSerializer, DocumentSerializer
+from rag_app.ingestion.pdf_processor import ingest_pdf, list_documents, delete_document
+from rest_framework.parsers import MultiPartParser, FormParser
+
 
 from rag_app.agent import run_agent, clear_session, get_session_history
 from rag_app.serializers import (
@@ -124,4 +130,141 @@ class SessionHistoryView(APIView):
             "session_id": session_id,
             "turn_count": len(messages) // 2,
             "messages":   messages,
+        })
+    
+class IngestView(APIView):
+    parser_classes = [MultiPartParser, FormParser]
+    """
+    POST /api/ingest/
+    Accepts a PDF file upload plus metadata fields.
+    Extracts, chunks, embeds, and stores the document in ChromaDB.
+
+    Form fields (multipart/form-data):
+        file          — the PDF file
+        source_name   — e.g. "SEBI Circular 2025-001"
+        category      — Regulatory | Transcript | ESG | Research | Other
+        document_type — e.g. "Investment Eligibility"
+        extra_metadata — optional JSON string e.g. '{"company_ticker":"ATHR"}'
+
+    This endpoint is what turns the system from a static demo into a live
+    knowledge base that grows with every upload.
+    """
+    parser_classes = [
+        __import__(
+            'rest_framework.parsers',
+            fromlist=['MultiPartParser', 'FormParser']
+        ).MultiPartParser,
+        __import__(
+            'rest_framework.parsers',
+            fromlist=['MultiPartParser', 'FormParser']
+        ).FormParser,
+    ]
+
+    def post(self, request):
+        from rest_framework.parsers import MultiPartParser, FormParser
+        serializer = IngestRequestSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        validated   = serializer.validated_data
+        uploaded    = validated["file"]
+        source_name = validated["source_name"]
+        category    = validated["category"]
+        doc_type    = validated["document_type"]
+
+        # Parse optional extra metadata
+        try:
+            extra = json.loads(validated.get("extra_metadata") or "{}")
+        except json.JSONDecodeError:
+            return Response(
+                {"extra_metadata": "Must be valid JSON or empty."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Validate file type
+        if not uploaded.name.lower().endswith(".pdf"):
+            return Response(
+                {"file": "Only PDF files are supported."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Write to a temp file — pdfplumber needs a file path, not a stream
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+                for chunk in uploaded.chunks():
+                    tmp.write(chunk)
+                tmp_path = tmp.name
+
+            result = ingest_pdf(
+                file_path     = tmp_path,
+                source_name   = source_name,
+                category      = category,
+                document_type = doc_type,
+                extra_metadata= extra,
+            )
+
+        except ValueError as e:
+            return Response({"error": str(e)}, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
+        except Exception as e:
+            logger.exception("[IngestView] Unexpected error during ingestion")
+            return Response(
+                {"error": f"Ingestion failed: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+        finally:
+            # Always clean up the temp file
+            if 'tmp_path' in locals() and os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+
+        return Response({
+            "status":       "ingested",
+            "doc_uuid":     result["doc_uuid"],
+            "source_name":  result["source_name"],
+            "chunk_count":  result["chunk_count"],
+            "char_count":   result["char_count"],
+            "message": (
+                f"Successfully ingested '{source_name}' into the knowledge base "
+                f"as {result['chunk_count']} searchable chunks."
+            ),
+        }, status=status.HTTP_201_CREATED)
+
+
+class DocumentListView(APIView):
+    """
+    GET  /api/documents/         — List all ingested documents
+    DELETE /api/documents/<uuid>/ — Delete a document by doc_uuid
+    """
+    def get(self, request):
+        docs = list_documents()
+        serializer = DocumentSerializer(data=docs, many=True)
+        serializer.is_valid()
+        return Response({
+            "count":     len(docs),
+            "documents": serializer.data,
+        })
+
+    def delete(self, request, doc_uuid: str):
+        if not doc_uuid:
+            return Response(
+                {"error": "doc_uuid is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            deleted_count = delete_document(doc_uuid)
+        except Exception as e:
+            return Response(
+                {"error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        if deleted_count == 0:
+            return Response(
+                {"error": f"No document found with doc_uuid '{doc_uuid}'."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        return Response({
+            "status":         "deleted",
+            "doc_uuid":       doc_uuid,
+            "chunks_deleted": deleted_count,
         })

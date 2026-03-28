@@ -49,3 +49,32 @@ class AgentResponseSerializer(serializers.Serializer):
     session_id     = serializers.CharField()
     tool_calls     = ToolCallSerializer(many=True)
     history_length = serializers.IntegerField()
+
+# rag_app/serializers.py  — ADD to bottom of existing file
+
+class IngestRequestSerializer(serializers.Serializer):
+    """Validates the multipart form fields for POST /api/ingest/."""
+    file          = serializers.FileField()
+    source_name   = serializers.CharField(max_length=255)
+    category      = serializers.ChoiceField(choices=[
+        "Regulatory", "Transcript", "ESG", "Research", "Other"
+    ])
+    document_type = serializers.CharField(max_length=255)
+    # Optional extra metadata as a JSON string
+    # e.g. '{"company_ticker": "ATHR", "year": "2025"}'
+    extra_metadata = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        default="{}",
+        help_text="Optional JSON string of extra metadata fields.",
+    )
+
+
+class DocumentSerializer(serializers.Serializer):
+    """Shapes one document record in the /api/documents/ response."""
+    doc_uuid      = serializers.CharField(allow_null=True)
+    source_name   = serializers.CharField()
+    category      = serializers.CharField()
+    document_type = serializers.CharField()
+    file_name     = serializers.CharField()
+    chunk_count   = serializers.IntegerField()
