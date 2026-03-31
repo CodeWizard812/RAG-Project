@@ -1,6 +1,6 @@
 import os
 import logging
-from typing import Dict, List
+from typing import Dict, List, Optional
 from dotenv import load_dotenv
 
 from langchain_classic.agents import AgentExecutor, create_tool_calling_agent
@@ -69,6 +69,11 @@ def _extract_text(content) -> str:
 
 
 def _build_agent_executor() -> AgentExecutor:
+    """
+    Builds the AgentExecutor. Called lazily on first request — NOT at
+    module import time. This ensures Django migrations have already run
+    and the database tables exist before SQLDatabase.from_uri() is called.
+    """
     from rag_app.utils.llm_factory import get_llm
     from rag_app.tools.sql_tool import get_sql_tool
     from rag_app.tools.vector_tool import get_vector_tool
@@ -97,8 +102,17 @@ def _build_agent_executor() -> AgentExecutor:
     logger.info("[Agent] AgentExecutor initialised successfully.")
     return executor
 
+_EXECUTOR: Optional[AgentExecutor] = None
 
-_EXECUTOR: AgentExecutor = _build_agent_executor()
+
+def _get_executor() -> AgentExecutor:
+    """Returns the singleton executor, building it on first call."""
+    global _EXECUTOR
+    if _EXECUTOR is None:
+        logger.info("[Agent] First request — initialising AgentExecutor...")
+        _EXECUTOR = _build_agent_executor()
+    return _EXECUTOR
+
 
 
 def get_session_history(session_id: str) -> List[BaseMessage]:
@@ -111,10 +125,15 @@ def clear_session(session_id: str) -> None:
 
 
 def run_agent(question: str, session_id: str = "default") -> dict:
+    """
+    Runs the agent for a given question and session.
+    Initialises the AgentExecutor on the very first call.
+    """
+    executor = _get_executor()
     history = get_session_history(session_id)
 
     try:
-        result = _EXECUTOR.invoke({
+        result = executor.invoke({
             "input":        question,
             "chat_history": history,
         })
