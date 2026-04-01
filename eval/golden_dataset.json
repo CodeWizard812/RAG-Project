@@ -1,0 +1,98 @@
+[
+  {
+    "id": "sql_001",
+    "category": "sql_only",
+    "question": "What was Aether Technologies' revenue in Q2 FY2025?",
+    "ground_truth": "Aether Technologies' revenue in Q2 FY2025 was USD 4,750,000,000 (4.75 billion dollars).",
+    "expected_tool": "financial_database_query",
+    "key_facts": ["4750000000", "4.75"]
+  },
+  {
+    "id": "sql_002",
+    "category": "sql_only",
+    "question": "What is GreenHorizon Energy's most recent debt-to-equity ratio?",
+    "ground_truth": "GreenHorizon Energy's most recent debt-to-equity ratio is 1.48, recorded in Q2 FY2025.",
+    "expected_tool": "financial_database_query",
+    "key_facts": ["1.48"]
+  },
+  {
+    "id": "sql_003",
+    "category": "sql_only",
+    "question": "Which company has the highest market capitalisation?",
+    "ground_truth": "Aether Technologies (ATHR) has the highest market capitalisation at USD 45 billion.",
+    "expected_tool": "financial_database_query",
+    "key_facts": ["Aether", "45"]
+  },
+  {
+    "id": "sql_004",
+    "category": "sql_only",
+    "question": "What was NovaMed Pharma's net income in Q1 FY2024?",
+    "ground_truth": "NovaMed Pharma's net income in Q1 FY2024 was USD 104,000,000 (104 million dollars).",
+    "expected_tool": "financial_database_query",
+    "key_facts": ["104000000", "104"]
+  },
+  {
+    "id": "sql_005",
+    "category": "sql_only",
+    "question": "What sector does Pinnacle Financial Group operate in?",
+    "ground_truth": "Pinnacle Financial Group operates in the Financial Services sector.",
+    "expected_tool": "financial_database_query",
+    "key_facts": ["Financial Services", "financial"]
+  },
+  {
+    "id": "vector_001",
+    "category": "vector_only",
+    "question": "What is the maximum debt-to-equity ratio permitted by SEBI for technology companies?",
+    "ground_truth": "According to SEBI Circular REG/2024/007, the maximum debt-to-equity ratio for technology and manufacturing companies is 2.0.",
+    "expected_tool": "regulatory_knowledge_search",
+    "key_facts": ["2.0", "2"]
+  },
+  {
+    "id": "vector_002",
+    "category": "vector_only",
+    "question": "How many quarters of positive net income does SEBI require for investment eligibility?",
+    "ground_truth": "SEBI requires a company to have reported positive net income in at least 3 of the last 4 consecutive quarters prior to evaluation.",
+    "expected_tool": "regulatory_knowledge_search",
+    "key_facts": ["3", "3 of the last 4", "three"]
+  },
+  {
+    "id": "vector_003",
+    "category": "vector_only",
+    "question": "What strategic pivot did Aether Technologies announce in their Q2 FY2025 earnings call?",
+    "ground_truth": "Aether Technologies announced a strategic pivot to Artificial Intelligence, deploying USD 280 million into AI infrastructure including the AetherMind sovereign AI product and a data centre in Hyderabad.",
+    "expected_tool": "regulatory_knowledge_search",
+    "key_facts": ["AI", "AetherMind", "280", "Hyderabad"]
+  },
+  {
+    "id": "vector_004",
+    "category": "vector_only",
+    "question": "Which firm issued GreenHorizon Energy's ESG compliance certificate?",
+    "ground_truth": "KPMG ESG Advisory, a SEBI-registered firm, issued GreenHorizon Energy's ESG compliance certificate for FY2024.",
+    "expected_tool": "regulatory_knowledge_search",
+    "key_facts": ["KPMG"]
+  },
+  {
+    "id": "cross_001",
+    "category": "cross_reference",
+    "question": "Is GreenHorizon Energy eligible for institutional investment under SEBI rules based on its current financials?",
+    "ground_truth": "Yes, GreenHorizon Energy appears eligible. Its D/E ratio of 1.48 is below SEBI's 2.0 limit, it has reported positive net income in all recent quarters, its market cap of USD 12.5 billion exceeds the USD 60 million minimum, and it holds a valid ESG compliance certificate from KPMG ESG Advisory as required for high-risk sector entities.",
+    "expected_tools": ["financial_database_query", "regulatory_knowledge_search"],
+    "key_facts": ["1.48", "2.0", "12.5", "KPMG", "eligible"]
+  },
+  {
+    "id": "cross_002",
+    "category": "cross_reference",
+    "question": "What revenue did Aether Technologies report in Q2 FY2025 and what did management say about future growth?",
+    "ground_truth": "Aether Technologies reported revenue of USD 4.75 billion in Q2 FY2025. Management raised full-year FY2025 revenue guidance to USD 19.2 billion and cited strong AI segment performance via AetherMind as the driver.",
+    "expected_tools": ["financial_database_query", "regulatory_knowledge_search"],
+    "key_facts": ["4.75", "19.2", "AetherMind", "guidance"]
+  },
+  {
+    "id": "cross_003",
+    "category": "cross_reference",
+    "question": "Does Pinnacle Financial Group meet SEBI's debt-to-equity requirement for institutional investment?",
+    "ground_truth": "Pinnacle Financial Group's D/E ratio is approximately 2.88-3.20, which exceeds SEBI's 2.0 limit for standard companies. However, as a financial services entity, SEBI permits a D/E ratio up to 4.0, so Pinnacle Financial Group meets the requirement.",
+    "expected_tools": ["financial_database_query", "regulatory_knowledge_search"],
+    "key_facts": ["4.0", "financial services", "meets"]
+  }
+]

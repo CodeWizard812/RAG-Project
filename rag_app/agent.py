@@ -1,6 +1,8 @@
+# rag_app/agent.py
+
 import os
 import logging
-from typing import Dict, List, Optional
+from typing import Optional
 from dotenv import load_dotenv
 
 from langchain_classic.agents import AgentExecutor, create_tool_calling_agent
@@ -10,8 +12,11 @@ from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 load_dotenv()
 logger = logging.getLogger(__name__)
 
-_SESSION_STORE: Dict[str, List[BaseMessage]] = {}
-MAX_HISTORY_TURNS = 10
+# ── Session memory TTL ────────────────────────────────────────────────────────
+# Sessions expire from Redis after this many seconds of inactivity.
+# 86400 = 24 hours. Prevents unbounded memory growth in production.
+SESSION_TTL_SECONDS = int(os.getenv("SESSION_TTL_SECONDS", 86400))
+MAX_HISTORY_TURNS   = int(os.getenv("MAX_HISTORY_TURNS", 10))
 
 SYSTEM_PROMPT = """You are a Financial and Regulatory Intelligence Agent specialising \
 in cross-referencing quantitative financial data with qualitative regulatory guidelines.
@@ -29,7 +34,7 @@ transcripts (strategic pivots, management commentary, forward guidance).
 REASONING RULES:
 - Quantitative questions only → financial_database_query
 - Qualitative or regulatory questions only → regulatory_knowledge_search
-- Cross-reference questions (e.g. eligibility checks) → use BOTH tools, then synthesise
+- Cross-reference questions → use BOTH tools, then synthesise a unified answer
 - Always cite which tool provided which piece of information
 - If a tool returns no results, say so explicitly — never hallucinate data
 - Format financial figures clearly: "USD 4.75B", "D/E ratio of 0.35"
@@ -37,43 +42,102 @@ REASONING RULES:
 """
 
 
+# ── Memory backend factory ─────────────────────────────────────────────────────
+
+def _get_memory_history(session_id: str):
+    """
+    Returns the appropriate chat history backend based on USE_REDIS setting.
+
+    Redis backend  → sessions persist across server restarts, work across
+                     multiple Django workers, expire automatically via TTL.
+
+    Fallback       → in-process list, resets on restart, single-worker only.
+                     Used when USE_REDIS=false (local dev without Redis).
+    """
+    use_redis = os.getenv("USE_REDIS", "true").lower() == "true"
+
+    if use_redis:
+        try:
+            from langchain_community.chat_message_histories import RedisChatMessageHistory
+            redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+            return RedisChatMessageHistory(
+                session_id=session_id,
+                url=redis_url,
+                ttl=SESSION_TTL_SECONDS,
+                key_prefix="rag_agent:session:",
+            )
+        except Exception as e:
+            logger.warning(
+                f"[Agent] Redis unavailable ({e}) — falling back to in-memory history."
+            )
+
+    # In-memory fallback
+    return _InMemoryHistory(session_id)
+
+
+class _InMemoryHistory:
+    """
+    Minimal in-memory chat history that matches the RedisChatMessageHistory
+    interface so the rest of agent.py works identically regardless of backend.
+    """
+    _store: dict = {}
+
+    def __init__(self, session_id: str):
+        self.session_id = session_id
+        if session_id not in _InMemoryHistory._store:
+            _InMemoryHistory._store[session_id] = []
+
+    @property
+    def messages(self):
+        return _InMemoryHistory._store[self.session_id]
+
+    def add_user_message(self, content: str):
+        _InMemoryHistory._store[self.session_id].append(
+            HumanMessage(content=content)
+        )
+        self._trim()
+
+    def add_ai_message(self, content: str):
+        _InMemoryHistory._store[self.session_id].append(
+            AIMessage(content=content)
+        )
+        self._trim()
+
+    def clear(self):
+        _InMemoryHistory._store[self.session_id] = []
+
+    def _trim(self):
+        """Keep only the last MAX_HISTORY_TURNS * 2 messages."""
+        store = _InMemoryHistory._store[self.session_id]
+        if len(store) > MAX_HISTORY_TURNS * 2:
+            _InMemoryHistory._store[self.session_id] = store[-(MAX_HISTORY_TURNS * 2):]
+
+
+# ── Text extraction ────────────────────────────────────────────────────────────
+
 def _extract_text(content) -> str:
-    """
-    Safely extracts a plain string from Gemini 2.5's response content.
-
-    Gemini 2.5 Flash/Pro can return content in three formats:
-      1. Plain string  →  "The revenue was USD 4.75B"
-      2. List of blocks → [{'type': 'text', 'text': '...', 'extras': {...}}]
-      3. Single block   → {'type': 'text', 'text': '...'}
-
-    This function normalises all three into a plain string.
-    """
+    """Normalises Gemini 2.5's response into a plain string."""
     if isinstance(content, str):
         return content
-
     if isinstance(content, list):
         parts = []
         for block in content:
-            if isinstance(block, dict):
-                if block.get("type") == "text":
-                    parts.append(block.get("text", ""))
+            if isinstance(block, dict) and block.get("type") == "text":
+                parts.append(block.get("text", ""))
             elif isinstance(block, str):
                 parts.append(block)
         return " ".join(p for p in parts if p).strip()
-
     if isinstance(content, dict) and content.get("type") == "text":
         return content.get("text", "").strip()
-
-    # Last resort — convert whatever it is to a string
     return str(content)
 
 
+# ── Agent executor (lazy singleton) ───────────────────────────────────────────
+
+_EXECUTOR: Optional[AgentExecutor] = None
+
+
 def _build_agent_executor() -> AgentExecutor:
-    """
-    Builds the AgentExecutor. Called lazily on first request — NOT at
-    module import time. This ensures Django migrations have already run
-    and the database tables exist before SQLDatabase.from_uri() is called.
-    """
     from rag_app.utils.llm_factory import get_llm
     from rag_app.tools.sql_tool import get_sql_tool
     from rag_app.tools.vector_tool import get_vector_tool
@@ -96,41 +160,54 @@ def _build_agent_executor() -> AgentExecutor:
         verbose=True,
         max_iterations=6,
         return_intermediate_steps=True,
-        # Still no handle_parsing_errors — we want real errors in logs
     )
 
     logger.info("[Agent] AgentExecutor initialised successfully.")
     return executor
 
-_EXECUTOR: Optional[AgentExecutor] = None
-
 
 def _get_executor() -> AgentExecutor:
-    """Returns the singleton executor, building it on first call."""
     global _EXECUTOR
     if _EXECUTOR is None:
-        logger.info("[Agent] First request — initialising AgentExecutor...")
+        logger.info("[Agent] First request — building AgentExecutor (lazy init)...")
         _EXECUTOR = _build_agent_executor()
     return _EXECUTOR
 
 
+# ── Public API ─────────────────────────────────────────────────────────────────
 
-def get_session_history(session_id: str) -> List[BaseMessage]:
-    return _SESSION_STORE.get(session_id, [])
+def get_session_history(session_id: str) -> list[BaseMessage]:
+    """Returns the current message list for a session."""
+    history = _get_memory_history(session_id)
+    return history.messages
 
 
 def clear_session(session_id: str) -> None:
-    _SESSION_STORE.pop(session_id, None)
+    """Clears all messages for a given session from the memory backend."""
+    history = _get_memory_history(session_id)
+    history.clear()
     logger.info(f"[Agent] Cleared session: {session_id}")
 
 
 def run_agent(question: str, session_id: str = "default") -> dict:
     """
     Runs the agent for a given question and session.
-    Initialises the AgentExecutor on the very first call.
+
+    Memory is loaded from and saved to the configured backend (Redis or
+    in-memory) so context persists across requests and server restarts.
+
+    Args:
+        question:   Natural language question from the user.
+        session_id: Conversation thread identifier. Scope this to the
+                    authenticated user in views.py to prevent bleed.
+
+    Returns:
+        dict with keys: answer, session_id, tool_calls, history_length,
+                        contexts (list of retrieved document snippets for RAGAS).
     """
     executor = _get_executor()
-    history = get_session_history(session_id)
+    memory   = _get_memory_history(session_id)
+    history  = memory.messages
 
     try:
         result = executor.invoke({
@@ -139,11 +216,7 @@ def run_agent(question: str, session_id: str = "default") -> dict:
         })
 
         raw_output = result.get("output", "")
-        logger.info(f"[Agent] Raw output type: {type(raw_output)}")
-        logger.info(f"[Agent] Raw output repr: {repr(raw_output)[:300]}")
-
-        # Normalise Gemini 2.5's content blocks into a plain string
-        answer = _extract_text(raw_output)
+        answer     = _extract_text(raw_output)
 
         if not answer.strip():
             answer = (
@@ -151,27 +224,31 @@ def run_agent(question: str, session_id: str = "default") -> dict:
                 "Check server logs for details."
             )
 
-        # Extract tool call trace
+        # Extract tool calls and retrieved contexts
+        # Contexts are the raw tool outputs — used by RAGAS for faithfulness scoring
         tool_calls = []
+        contexts   = []
+
         for step in result.get("intermediate_steps", []):
-            action, _ = step
+            action, tool_output = step
             tool_calls.append({
                 "tool":  getattr(action, "tool", "unknown"),
                 "input": getattr(action, "tool_input", {}),
             })
+            # Collect non-empty tool outputs as retrieved contexts
+            if isinstance(tool_output, str) and tool_output.strip():
+                contexts.append(tool_output)
 
-        # Store clean plain-text answer in memory — never the raw block dict.
-        # Storing the raw block as AIMessage.content poisons the next turn
-        # because Gemini receives `str({'type': 'text', ...})` as context.
-        history.append(HumanMessage(content=question))
-        history.append(AIMessage(content=answer))
-        _SESSION_STORE[session_id] = history[-(MAX_HISTORY_TURNS * 2):]
+        # Persist this turn to memory backend
+        memory.add_user_message(question)
+        memory.add_ai_message(answer)
 
         return {
             "answer":         answer,
             "session_id":     session_id,
             "tool_calls":     tool_calls,
-            "history_length": len(_SESSION_STORE[session_id]),
+            "history_length": len(memory.messages),
+            "contexts":       contexts,   # raw retrieved chunks — used by RAGAS
         }
 
     except Exception as e:
@@ -181,4 +258,5 @@ def run_agent(question: str, session_id: str = "default") -> dict:
             "session_id":     session_id,
             "tool_calls":     [],
             "history_length": len(history),
+            "contexts":       [],
         }
