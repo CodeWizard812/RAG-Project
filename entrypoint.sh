@@ -1,65 +1,60 @@
 #!/bin/sh
-
-set -e   # exit immediately on any error
-
-echo "==> Waiting for database to be ready..."
-# Double-check connectivity before running migrate
-python -c "
-import os, time, psycopg2
-for i in range(30):
-    try:
-        psycopg2.connect(
-            dbname=os.getenv('DB_NAME'),
-            user=os.getenv('DB_USER'),
-            password=os.getenv('DB_PASSWORD'),
-            host=os.getenv('DB_HOST'),
-            port=os.getenv('DB_PORT'),
-        )
-        print('Database connection established.')
-        break
-    except psycopg2.OperationalError:
-        print(f'Attempt {i+1}/30 — waiting...')
-        time.sleep(2)
-else:
-    print('ERROR: Could not connect to database after 30 attempts.')
-    exit(1)
-"
+set -e
 
 echo "==> Running migrations..."
 python manage.py migrate --noinput
 
-echo "==> Seeding SQL data (skips if data already exists)..."
+echo "==> Creating superuser if not exists..."
+python -c "
+import django, os
+django.setup()
+from django.contrib.auth.models import User
+username = os.getenv('DJANGO_SUPERUSER_USERNAME', 'admin')
+password = os.getenv('DJANGO_SUPERUSER_PASSWORD', 'changeme123')
+email    = os.getenv('DJANGO_SUPERUSER_EMAIL', 'admin@example.com')
+if not User.objects.filter(username=username).exists():
+    User.objects.create_superuser(username, email, password)
+    print(f'Superuser created: {username}')
+else:
+    print(f'Superuser already exists: {username}')
+"
+
+echo "==> Seeding SQL data..."
 python -c "
 import django, os
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'rag_project.settings')
 django.setup()
 from rag_app.models import Company
 if Company.objects.count() == 0:
-    print('No data found — running SQL seeder...')
     from rag_app.ingestion.seed_sql import run
     run()
 else:
-    print(f'SQL data already present ({Company.objects.count()} companies) — skipping.')
+    print(f'SQL data present ({Company.objects.count()} companies) — skipping.')
 "
 
-echo "==> Seeding vector data (skips if data already exists)..."
+echo "==> Seeding vector data..."
 python -c "
-import chromadb
-client = chromadb.PersistentClient(path='./chroma_store')
+import chromadb, os
+path = os.getenv('CHROMA_PATH', './chroma_store')
+client = chromadb.PersistentClient(path=path)
 try:
     col = client.get_collection('financial_regulatory_kb')
     count = col.count()
     if count == 0:
         raise ValueError('empty')
-    print(f'Vector data already present ({count} documents) — skipping.')
+    print(f'Vector data present ({count} docs) — skipping.')
 except Exception:
-    print('No vector data found — running vector seeder...')
-    import django, os, sys
+    print('Seeding vector data...')
+    import django
     os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'rag_project.settings')
     django.setup()
     from rag_app.ingestion.seed_vector import run
     run()
 "
 
-echo "==> Starting Django development server..."
-exec python manage.py runserver 0.0.0.0:8000
+echo "==> Starting server..."
+exec gunicorn rag_project.wsgi:application \
+    --bind 0.0.0.0:${PORT:-8000} \
+    --workers 2 \
+    --timeout 120 \
+    --log-level info
