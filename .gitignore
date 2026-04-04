@@ -222,3 +222,5 @@ chroma_db/
 
 # LangChain / LangGraph logs
 .langgraph/
+
+!frontend/lib/
