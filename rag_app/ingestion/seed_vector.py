@@ -12,11 +12,10 @@ django.setup()
 # ─────────────────────────────────────────────────────────────────────────────
 
 import chromadb
-from chromadb.utils import embedding_functions
+from rag_app.utils.embeddings import GeminiEmbeddingFunction
 
-CHROMA_PATH      = "./chroma_store"
-COLLECTION_NAME  = "financial_regulatory_kb"
-EMBEDDING_MODEL  = "all-MiniLM-L6-v2"
+CHROMA_PATH     = os.getenv("CHROMA_PATH", "./chroma_store")
+COLLECTION_NAME = "financial_regulatory_kb"
 
 # ── Document corpus ───────────────────────────────────────────────────────────
 DOCUMENTS = [
@@ -166,9 +165,7 @@ DOCUMENTS = [
 
 def get_collection():
     client = chromadb.PersistentClient(path=CHROMA_PATH)
-    ef = embedding_functions.SentenceTransformerEmbeddingFunction(
-        model_name=EMBEDDING_MODEL
-    )
+    ef     = GeminiEmbeddingFunction()
     collection = client.get_or_create_collection(
         name=COLLECTION_NAME,
         embedding_function=ef,
@@ -179,7 +176,6 @@ def get_collection():
 
 def run():
     print("\n── Vector Seeder: Financial & Regulatory Intelligence Agent ──")
-    print(f"  Embedding model : {EMBEDDING_MODEL}")
     print(f"  Collection      : {COLLECTION_NAME}")
     print(f"  Chroma path     : {CHROMA_PATH}\n")
 

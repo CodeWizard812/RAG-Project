@@ -1,60 +1,64 @@
 #!/bin/sh
+# entrypoint.sh — lean version for Render free tier
 set -e
+
+echo "==> Waiting for database..."
+python manage.py wait_for_db 2>/dev/null || python -c "
+import os, time, psycopg2
+url = os.getenv('DATABASE_URL', '')
+for i in range(20):
+    try:
+        psycopg2.connect(url)
+        print('Database ready.')
+        break
+    except Exception:
+        print(f'Waiting... ({i+1}/20)')
+        time.sleep(3)
+"
 
 echo "==> Running migrations..."
 python manage.py migrate --noinput
 
-echo "==> Creating superuser if not exists..."
-python -c "
-import django, os
-django.setup()
+echo "==> Creating superuser..."
+python manage.py shell -c "
 from django.contrib.auth.models import User
-username = os.getenv('DJANGO_SUPERUSER_USERNAME', 'admin')
-password = os.getenv('DJANGO_SUPERUSER_PASSWORD', 'changeme123')
-email    = os.getenv('DJANGO_SUPERUSER_EMAIL', 'admin@example.com')
-if not User.objects.filter(username=username).exists():
-    User.objects.create_superuser(username, email, password)
-    print(f'Superuser created: {username}')
-else:
-    print(f'Superuser already exists: {username}')
+import os
+u = os.getenv('DJANGO_SUPERUSER_USERNAME', 'admin')
+p = os.getenv('DJANGO_SUPERUSER_PASSWORD', 'changeme123')
+e = os.getenv('DJANGO_SUPERUSER_EMAIL', 'admin@rag.com')
+User.objects.filter(username=u).exists() or User.objects.create_superuser(u, e, p)
 "
 
 echo "==> Seeding SQL data..."
-python -c "
-import django, os
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'rag_project.settings')
-django.setup()
+python manage.py shell -c "
 from rag_app.models import Company
 if Company.objects.count() == 0:
     from rag_app.ingestion.seed_sql import run
     run()
 else:
-    print(f'SQL data present ({Company.objects.count()} companies) — skipping.')
+    print(f'SQL: {Company.objects.count()} companies already present.')
 "
 
 echo "==> Seeding vector data..."
-python -c "
-import chromadb, os
+python manage.py shell -c "
+import os, chromadb
+from rag_app.utils.embeddings import GeminiEmbeddingFunction
 path = os.getenv('CHROMA_PATH', './chroma_store')
 client = chromadb.PersistentClient(path=path)
+ef = GeminiEmbeddingFunction()
 try:
-    col = client.get_collection('financial_regulatory_kb')
-    count = col.count()
-    if count == 0:
+    col = client.get_or_create_collection('financial_regulatory_kb', embedding_function=ef)
+    if col.count() == 0:
         raise ValueError('empty')
-    print(f'Vector data present ({count} docs) — skipping.')
+    print(f'Vector: {col.count()} docs already present.')
 except Exception:
-    print('Seeding vector data...')
-    import django
-    os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'rag_project.settings')
-    django.setup()
     from rag_app.ingestion.seed_vector import run
     run()
 "
 
-echo "==> Starting server..."
+echo "==> Starting gunicorn..."
 exec gunicorn rag_project.wsgi:application \
     --bind 0.0.0.0:${PORT:-8000} \
-    --workers 2 \
+    --workers 1 \
     --timeout 120 \
     --log-level info

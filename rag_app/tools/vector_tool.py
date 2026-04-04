@@ -1,9 +1,11 @@
+import os
 import logging
 import chromadb
-from chromadb.utils import embedding_functions
+# from chromadb.utils import embedding_functions
 from pydantic import BaseModel, Field
 from langchain_core.tools import StructuredTool
 from dotenv import load_dotenv
+from rag_app.utils.embeddings import GeminiEmbeddingFunction 
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -24,9 +26,7 @@ class VectorQueryInput(BaseModel):
 
 def _get_collection():
     client = chromadb.PersistentClient(path=CHROMA_PATH)
-    ef = embedding_functions.SentenceTransformerEmbeddingFunction(
-        model_name=EMBEDDING_MODEL
-    )
+    ef = GeminiEmbeddingFunction() 
     return client.get_or_create_collection(
         name=COLLECTION_NAME,
         embedding_function=ef,

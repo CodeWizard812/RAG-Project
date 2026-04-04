@@ -4,14 +4,15 @@ import uuid
 import logging
 import pdfplumber
 import chromadb
-from chromadb.utils import embedding_functions
+#from chromadb.utils import embedding_functions
 from typing import List, Dict
+from rag_app.utils.embeddings import GeminiEmbeddingFunction 
 
 logger = logging.getLogger(__name__)
 
 CHROMA_PATH     = "./chroma_store"
+CHROMA_PATH     = os.getenv("CHROMA_PATH", "./chroma_store")
 COLLECTION_NAME = "financial_regulatory_kb"
-EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 
 # Chunking config — tuned for regulatory and financial documents
 CHUNK_SIZE        = 800   # characters per chunk
@@ -21,9 +22,7 @@ MIN_CHUNK_LENGTH  = 100   # discard chunks shorter than this (headers, page numb
 
 def _get_collection():
     client = chromadb.PersistentClient(path=CHROMA_PATH)
-    ef = embedding_functions.SentenceTransformerEmbeddingFunction(
-        model_name=EMBEDDING_MODEL
-    )
+    ef     = GeminiEmbeddingFunction() 
     return client.get_or_create_collection(
         name=COLLECTION_NAME,
         embedding_function=ef,
