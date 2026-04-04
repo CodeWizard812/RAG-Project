@@ -118,3 +118,48 @@ class TestRedis:
         r.set("rag_test_key", "working", ex=10)
         val = r.get("rag_test_key")
         assert val.decode() == "working"
+
+class TestKeyPool:
+    """Verifies key pool loads and rotates correctly."""
+
+    def test_pool_loads_at_least_one_key(self):
+        from rag_app.utils.key_pool import get_key_pool
+        pool = get_key_pool()
+        status = pool.status()
+        assert status["total_keys"] >= 1, \
+            "No API keys found — check GEMINI_API_KEY_1 in .env"
+
+    def test_pool_status_schema(self):
+        from rag_app.utils.key_pool import get_key_pool
+        status = get_key_pool().status()
+        assert "total_keys"     in status
+        assert "available_keys" in status
+        assert "exhausted_keys" in status
+        assert status["available_keys"] <= status["total_keys"]
+
+    def test_mark_exhausted_reduces_available(self):
+        from rag_app.utils.key_pool import GeminiKeyPool
+        # Test with a fresh pool instance so we don't affect the singleton
+        import unittest.mock as mock
+        with mock.patch.dict("os.environ", {
+            "GEMINI_API_KEY_1": "fake_key_aaa",
+            "GEMINI_API_KEY_2": "fake_key_bbb",
+        }):
+            pool = GeminiKeyPool()
+            assert pool.status()["available_keys"] == 2
+            pool.mark_exhausted("fake_key_aaa")
+            assert pool.status()["available_keys"] == 1
+
+    def test_exhausted_key_recovers_after_cooldown(self):
+        from rag_app.utils.key_pool import GeminiKeyPool
+        import unittest.mock as mock
+        with mock.patch.dict("os.environ", {
+            "GEMINI_API_KEY_1": "fake_key_ccc",
+        }):
+            pool = GeminiKeyPool()
+            pool.mark_exhausted("fake_key_ccc")
+            assert pool.status()["available_keys"] == 0
+            # Manually expire the cooldown
+            pool._exhausted["fake_key_ccc"] = 0   # set reset time to past
+            key = pool.get_available_key()
+            assert key == "fake_key_ccc"

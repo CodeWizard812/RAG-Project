@@ -58,6 +58,13 @@ class HealthView(APIView):
 
         model_type = os.getenv("LLM_MODEL_TYPE", "gemini-2.5-flash")
 
+        # Key pool status
+        try:
+            from rag_app.utils.key_pool import get_key_pool
+            pool_status = get_key_pool().status()
+        except Exception as e:
+            pool_status = {"error": str(e)}
+
         return Response({
             "status": "operational",
             "model":  model_type,
@@ -70,6 +77,7 @@ class HealthView(APIView):
                 "status":    vector_status,
                 "documents": vector_doc_count,
             },
+            "key_pool":   pool_status,
         })
 
 
