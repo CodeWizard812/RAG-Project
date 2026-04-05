@@ -1,0 +1,10 @@
+# requirements-dev.txt
+# Install locally only: pip install -r requirements-dev.txt
+# Do NOT add these to requirements.txt — ragas pulls openai + torch and
+# will break the Render build.
+
+ragas==0.2.10
+datasets==3.5.0
+pytest==8.3.5
+pytest-django==4.10.0
+pytest-cov==6.1.0
