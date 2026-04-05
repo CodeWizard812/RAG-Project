@@ -18,12 +18,19 @@ class SQLQueryInput(BaseModel):
 
 
 def _build_db_url() -> str:
+    db_url = os.getenv("DATABASE_URL")
+    
+    if db_url:
+        if db_url.startswith("postgres://"):
+            db_url = db_url.replace("postgres://", "postgresql://", 1)
+        return db_url
+
     return (
-        f"postgresql://{os.getenv('DB_USER')}:"
-        f"{os.getenv('DB_PASSWORD')}@"
-        f"{os.getenv('DB_HOST')}:"
-        f"{os.getenv('DB_PORT')}/"
-        f"{os.getenv('DB_NAME')}"
+        f"postgresql://{os.getenv('DB_USER', 'postgres')}:"
+        f"{os.getenv('DB_PASSWORD', 'yourpassword')}@"
+        f"{os.getenv('DB_HOST', 'localhost')}:"
+        f"{os.getenv('DB_PORT', '5432')}/"
+        f"{os.getenv('DB_NAME', 'ragdb')}"
     )
 
 
