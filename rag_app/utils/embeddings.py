@@ -21,7 +21,7 @@ class GeminiEmbeddingFunction:
         from langchain_google_genai import GoogleGenerativeAIEmbeddings
         api_key = self._get_api_key()
         self._model = GoogleGenerativeAIEmbeddings(
-            model="models/text-embedding-004",
+            model="models/gemini-embedding-001",
             google_api_key=api_key,
             task_type="retrieval_document",
         )
@@ -49,7 +49,7 @@ class GeminiEmbeddingFunction:
     def embed_query(self, text: str) -> List[float]:
         from langchain_google_genai import GoogleGenerativeAIEmbeddings
         query_model = GoogleGenerativeAIEmbeddings(
-            model="models/text-embedding-004",
+            model="models/gemini-embedding-001",
             google_api_key=self._get_api_key(),
             task_type="retrieval_query",
         )
