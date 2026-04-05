@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 CHROMA_PATH     = "./chroma_store"
 COLLECTION_NAME = "financial_regulatory_kb"
-EMBEDDING_MODEL = "all-MiniLM-L6-v2"
+#EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 TOP_K_RESULTS   = 3
 
 
@@ -40,10 +40,10 @@ def get_vector_tool() -> StructuredTool:
     the ChromaDB financial & regulatory knowledge base.
     Returns the top 3 relevant document snippets as a formatted string.
     """
-    collection = _get_collection()
 
     def search_knowledge_base(query: str) -> str:
         try:
+            collection = _get_collection()
             results = collection.query(
                 query_texts=[query],
                 n_results=TOP_K_RESULTS,
