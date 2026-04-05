@@ -219,6 +219,7 @@ __marimo__/
 chroma_db/
 *.parquet
 *.bin
+chroma_store/
 
 # LangChain / LangGraph logs
 .langgraph/
