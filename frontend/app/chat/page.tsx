@@ -9,8 +9,9 @@ import ReactMarkdown from "react-markdown";
 import {
   getToken, clearToken, clearSession, streamChat,
   parseContextsToSources, fetchSessionHistory,
-  loadStoredSessions, saveStoredSessions, clearStoredSessions,
+  loadStoredSessions, saveStoredSessions,
 } from "@/lib/api";
+import { useKeepAlive } from "@/hooks/useKeepAlive";
 import type { Message, Session, SourceDoc, ModelType } from "@/lib/types";
 import PDFIngestModal from "@/components/PDFIngestModal";
 
@@ -125,16 +126,20 @@ function MessageBubble({ msg }: { msg: Message }) {
   );
 }
 
-// ── Session row with inline rename ─────────────────────────────────────────
+// ── Session row ────────────────────────────────────────────────────────────
 
 function SessionRow({
-  session, active, onSelect, onRename,
+  session, active, onSelect, onRename, onDelete,
 }: {
-  session: Session; active: boolean;
-  onSelect: () => void; onRename: (label: string) => void;
+  session:  Session;
+  active:   boolean;
+  onSelect: () => void;
+  onRename: (label: string) => void;
+  onDelete: () => void;
 }) {
-  const [editing, setEditing] = useState(false);
-  const [draft,   setDraft]   = useState(session.label);
+  const [editing,  setEditing]  = useState(false);
+  const [draft,    setDraft]    = useState(session.label);
+  const [confirm,  setConfirm]  = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   function startEdit(e: React.MouseEvent) {
@@ -155,10 +160,21 @@ function SessionRow({
     if (e.key === "Escape") { setEditing(false); setDraft(session.label); }
   }
 
+  function handleDeleteClick(e: React.MouseEvent) {
+    e.stopPropagation();
+    if (confirm) {
+      onDelete();
+    } else {
+      setConfirm(true);
+      // Auto-cancel confirm state after 3 seconds if user doesn't click again
+      setTimeout(() => setConfirm(false), 3000);
+    }
+  }
+
   return (
     <div
       onClick={onSelect}
-      className={`group flex items-center justify-between px-3 py-2 rounded-lg cursor-pointer transition-colors ${
+      className={`group flex items-center gap-1 px-2 py-2 rounded-lg cursor-pointer transition-colors ${
         active ? "bg-blue-50 text-blue-700" : "text-gray-600 hover:bg-gray-50"
       }`}
     >
@@ -173,18 +189,35 @@ function SessionRow({
           className="flex-1 text-sm bg-white border border-blue-300 rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-blue-400 text-gray-900"
         />
       ) : (
-        <>
-          <span className="text-sm truncate flex-1">{session.label}</span>
+        <span className="text-sm truncate flex-1">{session.label}</span>
+      )}
+
+      {!editing && (
+        <div className={`flex gap-0.5 transition-opacity ${active ? "opacity-60" : "opacity-0 group-hover:opacity-60"}`}>
+          {/* Rename */}
           <button
             onClick={startEdit}
             title="Rename"
-            className={`text-xs px-1 rounded transition-opacity ${
-              active ? "opacity-60 hover:opacity-100" : "opacity-0 group-hover:opacity-60 hover:opacity-100!"
-            } text-gray-400 hover:text-gray-600`}
+            className="p-0.5 rounded hover:opacity-100 hover:text-gray-700 text-gray-400"
           >
-            ✎
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <path d="M11.5 2.5l2 2-9 9H2.5v-2L11.5 2.5z"/>
+            </svg>
           </button>
-        </>
+
+          {/* Delete — first click shows red confirmation, second click confirms */}
+          <button
+            onClick={handleDeleteClick}
+            title={confirm ? "Click again to confirm delete" : "Delete chat"}
+            className={`p-0.5 rounded hover:opacity-100 transition-colors ${
+              confirm ? "text-red-500 opacity-100" : "text-gray-400 hover:text-red-500"
+            }`}
+          >
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <path d="M2 4h12M5 4V2h6v2M6 7v5M10 7v5M3 4l1 10h8L13 4"/>
+            </svg>
+          </button>
+        </div>
       )}
     </div>
   );
@@ -192,39 +225,30 @@ function SessionRow({
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-/** Convert backend history records into frontend Message objects. */
 function historyToMessages(
   records: Array<{ role: "human" | "ai"; content: string }>,
 ): Message[] {
-  return records.map(r => ({
-    id:      uid(),
-    role:    r.role,
-    content: r.content,
-  }));
+  return records.map(r => ({ id: uid(), role: r.role, content: r.content }));
 }
 
-/** Use the first human message as a short session label. */
-function labelFromHistory(
+function labelFromFirstMessage(
   records: Array<{ role: "human" | "ai"; content: string }>,
   fallback: string,
 ): string {
   const first = records.find(r => r.role === "human");
   if (!first) return fallback;
-  return first.content.length > 40
-    ? first.content.slice(0, 40) + "…"
-    : first.content;
+  return first.content.length > 38 ? first.content.slice(0, 38) + "…" : first.content;
 }
 
 // ── Main page ──────────────────────────────────────────────────────────────
 
 export default function ChatPage() {
   const router = useRouter();
+  useKeepAlive();   // ← pings /api/health/ every 10 min
 
   useEffect(() => {
     if (!getToken()) router.replace("/");
   }, [router]);
-
-  // ── State ────────────────────────────────────────────────────────────────
 
   const [sessions,        setSessions]        = useState<Session[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string>("");
@@ -238,22 +262,21 @@ export default function ChatPage() {
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef  = useRef<HTMLTextAreaElement>(null);
 
-  // ── Boot — load persisted sessions ──────────────────────────────────────
+  // ── Boot ─────────────────────────────────────────────────────────────────
 
   useEffect(() => {
+    // loadStoredSessions() reads from the namespaced key rag_sessions:{username}
+    // so each user only ever sees their own sessions
     const stored = loadStoredSessions();
     if (stored.length > 0) {
       setSessions(stored);
-      // Don't auto-switch — let user pick, or default to first
       setActiveSessionId(stored[0].id);
-      // Load history for the first session silently
       loadHistory(stored[0].id);
     } else {
-      // First ever login — create a default session
-      const id = uid();
-      const s  = [{ id, label: "Chat 1" }];
-      setSessions(s);
-      saveStoredSessions(s);
+      const id      = uid();
+      const initial = [{ id, label: "Chat 1" }];
+      setSessions(initial);
+      saveStoredSessions(initial);
       setActiveSessionId(id);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -263,7 +286,7 @@ export default function ChatPage() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // ── History loading ──────────────────────────────────────────────────────
+  // ── History ───────────────────────────────────────────────────────────────
 
   async function loadHistory(sessionId: string) {
     if (!sessionId) return;
@@ -272,15 +295,14 @@ export default function ChatPage() {
       const records = await fetchSessionHistory(sessionId);
       if (records.length > 0) {
         setMessages(historyToMessages(records));
-        // Update label from first message if it's still a generic name
         setSessions(prev => {
-          const session = prev.find(s => s.id === sessionId);
+          const session  = prev.find(s => s.id === sessionId);
           if (!session) return prev;
           const isGeneric = /^Chat \d+$/.test(session.label);
           if (!isGeneric) return prev;
           const updated = prev.map(s =>
             s.id === sessionId
-              ? { ...s, label: labelFromHistory(records, s.label) }
+              ? { ...s, label: labelFromFirstMessage(records, s.label) }
               : s
           );
           saveStoredSessions(updated);
@@ -296,42 +318,65 @@ export default function ChatPage() {
     }
   }
 
-  // ── Session management ───────────────────────────────────────────────────
+  // ── Session management ────────────────────────────────────────────────────
 
   function newSession() {
-    const id    = uid();
-    const label = `Chat ${sessions.length + 1}`;
+    const id      = uid();
+    const label   = `Chat ${sessions.length + 1}`;
     const updated = [...sessions, { id, label }];
     setSessions(updated);
     saveStoredSessions(updated);
     setActiveSessionId(id);
-    setMessages([]);    // new session starts empty — correct behaviour
+    setMessages([]);
   }
 
   async function switchSession(id: string) {
     if (id === activeSessionId) return;
     setActiveSessionId(id);
     setMessages([]);
-    await loadHistory(id);  // ← fetch from Upstash, don't leave blank
+    await loadHistory(id);
   }
 
   function renameSession(id: string, newLabel: string) {
     const updated = sessions.map(s => s.id === id ? { ...s, label: newLabel } : s);
     setSessions(updated);
-    saveStoredSessions(updated);  // persist rename
+    saveStoredSessions(updated);
   }
 
-  async function handleClearSession() {
-    await clearSession(activeSessionId);
-    setMessages([]);
+  // Delete: clears backend history AND removes from sidebar + localStorage
+  async function deleteSession(id: string) {
+    // 1. Wipe history from Redis/Upstash
+    await clearSession(id).catch(() => {});
+
+    // 2. Remove from local list
+    const updated = sessions.filter(s => s.id !== id);
+    setSessions(updated);
+    saveStoredSessions(updated);
+
+    // 3. If we deleted the active session, switch to another or create new
+    if (id === activeSessionId) {
+      if (updated.length > 0) {
+        setActiveSessionId(updated[0].id);
+        await loadHistory(updated[0].id);
+      } else {
+        const newId    = uid();
+        const newSessions = [{ id: newId, label: "Chat 1" }];
+        setSessions(newSessions);
+        saveStoredSessions(newSessions);
+        setActiveSessionId(newId);
+        setMessages([]);
+      }
+    }
   }
 
   function handleLogout() {
+    // Sessions stay in localStorage under the namespaced key —
+    // they will reload correctly when this user logs in again.
     clearToken();
     router.replace("/");
   }
 
-  // ── Streaming ────────────────────────────────────────────────────────────
+  // ── Streaming ─────────────────────────────────────────────────────────────
 
   const sendMessage = useCallback(async (question: string) => {
     if (!question.trim() || isStreaming) return;
@@ -346,13 +391,12 @@ export default function ChatPage() {
       { id: aiId, role: "ai", content: "", isStreaming: true, activeTools: [], toolCalls: [] },
     ]);
 
-    // After first message, update session label from the question
+    // Auto-label from first message
     setSessions(prev => {
       const session = prev.find(s => s.id === activeSessionId);
       if (!session) return prev;
-      const isGeneric = /^Chat \d+$/.test(session.label);
-      if (!isGeneric) return prev;
-      const label   = question.length > 40 ? question.slice(0, 40) + "…" : question;
+      if (!/^Chat \d+$/.test(session.label)) return prev;
+      const label   = question.length > 38 ? question.slice(0, 38) + "…" : question;
       const updated = prev.map(s => s.id === activeSessionId ? { ...s, label } : s);
       saveStoredSessions(updated);
       return updated;
@@ -391,17 +435,28 @@ export default function ChatPage() {
             ));
           }
           setMessages(prev => prev.map(m =>
-            m.id !== aiId ? m : { ...m, content: answer, isStreaming: false, activeTools: [], toolCalls, sources }
+            m.id !== aiId ? m : {
+              ...m, content: answer, isStreaming: false,
+              activeTools: [], toolCalls, sources,
+            }
           ));
         } else if (type === "error") {
           setMessages(prev => prev.map(m =>
-            m.id !== aiId ? m : { ...m, content: `Error: ${event.message as string}`, isStreaming: false, activeTools: [] }
+            m.id !== aiId ? m : {
+              ...m,
+              content:     `Error: ${event.message as string}`,
+              isStreaming: false, activeTools: [],
+            }
           ));
         }
       }
     } catch (err) {
       setMessages(prev => prev.map(m =>
-        m.id !== aiId ? m : { ...m, content: `Connection error: ${(err as Error).message}`, isStreaming: false, activeTools: [] }
+        m.id !== aiId ? m : {
+          ...m,
+          content:     `Connection error: ${(err as Error).message}`,
+          isStreaming: false, activeTools: [],
+        }
       ));
     } finally {
       setIsStreaming(false);
@@ -419,7 +474,7 @@ export default function ChatPage() {
 
   const activeSession = sessions.find(s => s.id === activeSessionId);
 
-  // ── Render ───────────────────────────────────────────────────────────────
+  // ── Render ────────────────────────────────────────────────────────────────
 
   return (
     <>
@@ -440,22 +495,29 @@ export default function ChatPage() {
                 active={s.id === activeSessionId}
                 onSelect={() => switchSession(s.id)}
                 onRename={label => renameSession(s.id, label)}
+                onDelete={() => deleteSession(s.id)}
               />
             ))}
           </div>
 
           <div className="px-3 pb-4 flex flex-col gap-0.5 border-t border-gray-100 pt-3">
-            <button onClick={newSession} className="w-full text-left px-3 py-1.5 text-sm text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
+            <button
+              onClick={newSession}
+              className="w-full text-left px-3 py-1.5 text-sm text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+            >
               + New chat
             </button>
-            <button onClick={() => setShowIngest(true)} className="w-full text-left px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50 rounded-lg transition-colors flex items-center gap-2">
+            <button
+              onClick={() => setShowIngest(true)}
+              className="w-full text-left px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50 rounded-lg transition-colors flex items-center gap-2"
+            >
               <span>Upload PDF</span>
               <span className="text-xs bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded font-medium">new</span>
             </button>
-            <button onClick={handleClearSession} className="w-full text-left px-3 py-1.5 text-sm text-gray-500 hover:bg-gray-50 rounded-lg transition-colors">
-              Clear chat
-            </button>
-            <button onClick={handleLogout} className="w-full text-left px-3 py-1.5 text-sm text-gray-400 hover:bg-gray-50 rounded-lg transition-colors">
+            <button
+              onClick={handleLogout}
+              className="w-full text-left px-3 py-1.5 text-sm text-gray-400 hover:bg-gray-50 rounded-lg transition-colors"
+            >
               Sign out
             </button>
           </div>
@@ -464,7 +526,7 @@ export default function ChatPage() {
         {/* Main */}
         <main className="flex-1 flex flex-col overflow-hidden">
           <header className="bg-white border-b border-gray-100 px-6 py-3 flex items-center justify-between">
-            <div className="text-sm text-gray-500 truncate max-w-xs">
+            <div className="text-sm truncate max-w-xs">
               {historyLoading
                 ? <span className="text-gray-400 italic text-xs">Loading history…</span>
                 : <span className="font-medium text-gray-800">{activeSession?.label ?? "Chat"}</span>
@@ -476,7 +538,9 @@ export default function ChatPage() {
                   key={m}
                   onClick={() => setModel(m)}
                   className={`px-3 py-1 text-xs rounded-md transition-colors font-medium ${
-                    model === m ? "bg-white text-blue-700 border border-blue-200" : "text-gray-500 hover:text-gray-700"
+                    model === m
+                      ? "bg-white text-blue-700 border border-blue-200"
+                      : "text-gray-500 hover:text-gray-700"
                   }`}
                 >
                   {m === "gemini-2.5-flash" ? "Flash" : "Pro"}
@@ -492,7 +556,9 @@ export default function ChatPage() {
               </div>
             ) : messages.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-full text-center">
-                <p className="text-gray-400 text-sm mb-4">Ask about financials, SEBI rules, or compare companies.</p>
+                <p className="text-gray-400 text-sm mb-4">
+                  Ask about financials, SEBI rules, or compare companies.
+                </p>
                 <div className="flex flex-col gap-2 w-full max-w-lg">
                   {[
                     "Is GreenHorizon eligible for SEBI institutional investment?",
@@ -546,9 +612,9 @@ export default function ChatPage() {
             <p className="text-xs text-gray-400 text-center mt-2">
               Using <span className="font-medium">{model}</span>
               {" · "}
-              <button onClick={handleClearSession} className="hover:text-gray-600">clear chat</button>
-              {" · "}
-              <button onClick={() => setShowIngest(true)} className="hover:text-gray-600">upload PDF</button>
+              <button onClick={() => setShowIngest(true)} className="hover:text-gray-600">
+                upload PDF
+              </button>
             </p>
           </div>
         </main>
