@@ -464,3 +464,14 @@ class RegisterView(APIView):
             {"status": "registered", "username": user.username},
             status=status.HTTP_201_CREATED,
         )
+
+class SimplePingView(APIView):
+    """
+    GET /api/ping/
+    A minimalist endpoint for external keep-alive services.
+    Does not query DB or Vector store.
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        return Response({"status": "awake"}, status=status.HTTP_200_OK)

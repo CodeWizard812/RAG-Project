@@ -16,11 +16,13 @@ from rag_app.views import (
     DocumentListView,
     StreamingChatView,
     RegisterView,
+    SimplePingView,
 )
 
 urlpatterns = [
     # System
     path("health/",                   HealthView.as_view(),         name="health"),
+    path("ping/",                     SimplePingView.as_view(), name="simple-ping"),
 
     # Auth — all public
     path("auth/register/",            RegisterView.as_view(),        name="register"),
