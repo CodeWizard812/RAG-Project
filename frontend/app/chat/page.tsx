@@ -8,7 +8,8 @@ import { useRouter } from "next/navigation";
 import ReactMarkdown from "react-markdown";
 import {
   getToken, clearToken, clearSession, streamChat,
-  parseContextsToSources,
+  parseContextsToSources, fetchSessionHistory,
+  loadStoredSessions, saveStoredSessions, clearStoredSessions,
 } from "@/lib/api";
 import type { Message, Session, SourceDoc, ModelType } from "@/lib/types";
 import PDFIngestModal from "@/components/PDFIngestModal";
@@ -33,16 +34,9 @@ function ToolBadge({ tool, active }: { tool: string; active?: boolean }) {
   const label  = TOOL_LABELS[tool]  ?? tool;
   const colors = TOOL_COLORS[tool]  ?? "bg-gray-50 text-gray-700 border-gray-200";
   return (
-    <span
-      className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full border ${colors} ${
-        active ? "animate-pulse" : ""
-      }`}
-    >
-      {active && (
-        <span className="w-1.5 h-1.5 rounded-full bg-current opacity-75" />
-      )}
-      {label}
-      {active ? "…" : " ✓"}
+    <span className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full border ${colors} ${active ? "animate-pulse" : ""}`}>
+      {active && <span className="w-1.5 h-1.5 rounded-full bg-current opacity-75" />}
+      {label}{active ? "…" : " ✓"}
     </span>
   );
 }
@@ -59,9 +53,7 @@ function SourceCard({ src }: { src: SourceDoc }) {
           <span className="font-medium text-gray-800">{src.source}</span>
           <span className="ml-2 text-gray-400">{src.category}</span>
           {src.docType && (
-            <span className="ml-2 bg-gray-200 text-gray-600 px-1.5 py-0.5 rounded text-xs">
-              {src.docType}
-            </span>
+            <span className="ml-2 bg-gray-200 text-gray-600 px-1.5 py-0.5 rounded">{src.docType}</span>
           )}
         </div>
         <div className="flex items-center gap-2 text-gray-400">
@@ -88,30 +80,20 @@ function MessageBubble({ msg }: { msg: Message }) {
       </div>
     );
   }
-
   return (
     <div className="flex justify-start">
       <div className="max-w-[85%] flex flex-col gap-2">
         {((msg.activeTools?.length ?? 0) > 0 || (msg.toolCalls?.length ?? 0) > 0) && (
           <div className="flex flex-wrap gap-1.5">
-            {msg.activeTools?.map(t => (
-              <ToolBadge key={t} tool={t} active />
-            ))}
-            {msg.toolCalls?.map((tc, i) => (
-              <ToolBadge key={i} tool={tc.tool} active={false} />
-            ))}
+            {msg.activeTools?.map(t => <ToolBadge key={t} tool={t} active />)}
+            {msg.toolCalls?.map((tc, i) => <ToolBadge key={i} tool={tc.tool} />)}
           </div>
         )}
-
         <div className="bg-white border border-gray-100 rounded-2xl rounded-tl-sm px-4 py-3 text-sm leading-relaxed text-gray-800">
           {msg.isStreaming && !msg.content ? (
             <div className="flex gap-1 items-center py-1">
               {[0, 150, 300].map(d => (
-                <span
-                  key={d}
-                  className="w-2 h-2 bg-gray-300 rounded-full animate-bounce"
-                  style={{ animationDelay: `${d}ms` }}
-                />
+                <span key={d} className="w-2 h-2 bg-gray-300 rounded-full animate-bounce" style={{ animationDelay: `${d}ms` }} />
               ))}
             </div>
           ) : (
@@ -130,15 +112,12 @@ function MessageBubble({ msg }: { msg: Message }) {
             <span className="inline-block w-0.5 h-4 bg-blue-500 ml-0.5 animate-pulse align-middle" />
           )}
         </div>
-
         {(msg.sources?.length ?? 0) > 0 && (
           <div className="flex flex-col gap-1.5">
             <p className="text-xs text-gray-400 px-1">
               {msg.sources!.length} source{msg.sources!.length > 1 ? "s" : ""} retrieved
             </p>
-            {msg.sources!.map((src, i) => (
-              <SourceCard key={i} src={src} />
-            ))}
+            {msg.sources!.map((src, i) => <SourceCard key={i} src={src} />)}
           </div>
         )}
       </div>
@@ -149,15 +128,10 @@ function MessageBubble({ msg }: { msg: Message }) {
 // ── Session row with inline rename ─────────────────────────────────────────
 
 function SessionRow({
-  session,
-  active,
-  onSelect,
-  onRename,
+  session, active, onSelect, onRename,
 }: {
-  session:  Session;
-  active:   boolean;
-  onSelect: () => void;
-  onRename: (newLabel: string) => void;
+  session: Session; active: boolean;
+  onSelect: () => void; onRename: (label: string) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft,   setDraft]   = useState(session.label);
@@ -167,20 +141,17 @@ function SessionRow({
     e.stopPropagation();
     setDraft(session.label);
     setEditing(true);
-    setTimeout(() => {
-      inputRef.current?.focus();
-      inputRef.current?.select();
-    }, 0);
+    setTimeout(() => { inputRef.current?.focus(); inputRef.current?.select(); }, 0);
   }
 
-  function commitEdit() {
-    const trimmed = draft.trim();
-    if (trimmed && trimmed !== session.label) onRename(trimmed);
+  function commit() {
+    const t = draft.trim();
+    if (t && t !== session.label) onRename(t);
     setEditing(false);
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
-    if (e.key === "Enter")  { e.preventDefault(); commitEdit(); }
+    if (e.key === "Enter")  { e.preventDefault(); commit(); }
     if (e.key === "Escape") { setEditing(false); setDraft(session.label); }
   }
 
@@ -188,9 +159,7 @@ function SessionRow({
     <div
       onClick={onSelect}
       className={`group flex items-center justify-between px-3 py-2 rounded-lg cursor-pointer transition-colors ${
-        active
-          ? "bg-blue-50 text-blue-700"
-          : "text-gray-600 hover:bg-gray-50"
+        active ? "bg-blue-50 text-blue-700" : "text-gray-600 hover:bg-gray-50"
       }`}
     >
       {editing ? (
@@ -198,7 +167,7 @@ function SessionRow({
           ref={inputRef}
           value={draft}
           onChange={e => setDraft(e.target.value)}
-          onBlur={commitEdit}
+          onBlur={commit}
           onKeyDown={onKeyDown}
           onClick={e => e.stopPropagation()}
           className="flex-1 text-sm bg-white border border-blue-300 rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-blue-400 text-gray-900"
@@ -206,11 +175,10 @@ function SessionRow({
       ) : (
         <>
           <span className="text-sm truncate flex-1">{session.label}</span>
-          {/* Rename pencil — visible on hover or when active */}
           <button
             onClick={startEdit}
-            title="Rename session"
-            className={`text-xs px-1 py-0.5 rounded transition-opacity ${
+            title="Rename"
+            className={`text-xs px-1 rounded transition-opacity ${
               active ? "opacity-60 hover:opacity-100" : "opacity-0 group-hover:opacity-60 hover:opacity-100!"
             } text-gray-400 hover:text-gray-600`}
           >
@@ -222,6 +190,31 @@ function SessionRow({
   );
 }
 
+// ── Helpers ────────────────────────────────────────────────────────────────
+
+/** Convert backend history records into frontend Message objects. */
+function historyToMessages(
+  records: Array<{ role: "human" | "ai"; content: string }>,
+): Message[] {
+  return records.map(r => ({
+    id:      uid(),
+    role:    r.role,
+    content: r.content,
+  }));
+}
+
+/** Use the first human message as a short session label. */
+function labelFromHistory(
+  records: Array<{ role: "human" | "ai"; content: string }>,
+  fallback: string,
+): string {
+  const first = records.find(r => r.role === "human");
+  if (!first) return fallback;
+  return first.content.length > 40
+    ? first.content.slice(0, 40) + "…"
+    : first.content;
+}
+
 // ── Main page ──────────────────────────────────────────────────────────────
 
 export default function ChatPage() {
@@ -231,11 +224,12 @@ export default function ChatPage() {
     if (!getToken()) router.replace("/");
   }, [router]);
 
-  const [sessions,        setSessions]        = useState<Session[]>([
-    { id: "default", label: "New session" },
-  ]);
-  const [activeSessionId, setActiveSessionId] = useState("default");
+  // ── State ────────────────────────────────────────────────────────────────
+
+  const [sessions,        setSessions]        = useState<Session[]>([]);
+  const [activeSessionId, setActiveSessionId] = useState<string>("");
   const [messages,        setMessages]        = useState<Message[]>([]);
+  const [historyLoading,  setHistoryLoading]  = useState(false);
   const [input,           setInput]           = useState("");
   const [model,           setModel]           = useState<ModelType>("gemini-2.5-flash");
   const [isStreaming,     setIsStreaming]      = useState(false);
@@ -244,29 +238,87 @@ export default function ChatPage() {
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef  = useRef<HTMLTextAreaElement>(null);
 
+  // ── Boot — load persisted sessions ──────────────────────────────────────
+
+  useEffect(() => {
+    const stored = loadStoredSessions();
+    if (stored.length > 0) {
+      setSessions(stored);
+      // Don't auto-switch — let user pick, or default to first
+      setActiveSessionId(stored[0].id);
+      // Load history for the first session silently
+      loadHistory(stored[0].id);
+    } else {
+      // First ever login — create a default session
+      const id = uid();
+      const s  = [{ id, label: "Chat 1" }];
+      setSessions(s);
+      saveStoredSessions(s);
+      setActiveSessionId(id);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  // ── History loading ──────────────────────────────────────────────────────
+
+  async function loadHistory(sessionId: string) {
+    if (!sessionId) return;
+    setHistoryLoading(true);
+    try {
+      const records = await fetchSessionHistory(sessionId);
+      if (records.length > 0) {
+        setMessages(historyToMessages(records));
+        // Update label from first message if it's still a generic name
+        setSessions(prev => {
+          const session = prev.find(s => s.id === sessionId);
+          if (!session) return prev;
+          const isGeneric = /^Chat \d+$/.test(session.label);
+          if (!isGeneric) return prev;
+          const updated = prev.map(s =>
+            s.id === sessionId
+              ? { ...s, label: labelFromHistory(records, s.label) }
+              : s
+          );
+          saveStoredSessions(updated);
+          return updated;
+        });
+      } else {
+        setMessages([]);
+      }
+    } catch {
+      setMessages([]);
+    } finally {
+      setHistoryLoading(false);
+    }
+  }
 
   // ── Session management ───────────────────────────────────────────────────
 
   function newSession() {
     const id    = uid();
-    const label = `Session ${sessions.length + 1}`;
-    setSessions(p => [...p, { id, label }]);
+    const label = `Chat ${sessions.length + 1}`;
+    const updated = [...sessions, { id, label }];
+    setSessions(updated);
+    saveStoredSessions(updated);
     setActiveSessionId(id);
-    setMessages([]);
+    setMessages([]);    // new session starts empty — correct behaviour
   }
 
-  function switchSession(id: string) {
+  async function switchSession(id: string) {
+    if (id === activeSessionId) return;
     setActiveSessionId(id);
     setMessages([]);
+    await loadHistory(id);  // ← fetch from Upstash, don't leave blank
   }
 
   function renameSession(id: string, newLabel: string) {
-    setSessions(prev =>
-      prev.map(s => s.id === id ? { ...s, label: newLabel } : s)
-    );
+    const updated = sessions.map(s => s.id === id ? { ...s, label: newLabel } : s);
+    setSessions(updated);
+    saveStoredSessions(updated);  // persist rename
   }
 
   async function handleClearSession() {
@@ -283,27 +335,28 @@ export default function ChatPage() {
 
   const sendMessage = useCallback(async (question: string) => {
     if (!question.trim() || isStreaming) return;
-
     setIsStreaming(true);
 
     const humanId = uid();
-    setMessages(prev => [
-      ...prev,
-      { id: humanId, role: "human", content: question },
-    ]);
+    setMessages(prev => [...prev, { id: humanId, role: "human", content: question }]);
 
     const aiId = uid();
     setMessages(prev => [
       ...prev,
-      {
-        id:          aiId,
-        role:        "ai",
-        content:     "",
-        isStreaming: true,
-        activeTools: [],
-        toolCalls:   [],
-      },
+      { id: aiId, role: "ai", content: "", isStreaming: true, activeTools: [], toolCalls: [] },
     ]);
+
+    // After first message, update session label from the question
+    setSessions(prev => {
+      const session = prev.find(s => s.id === activeSessionId);
+      if (!session) return prev;
+      const isGeneric = /^Chat \d+$/.test(session.label);
+      if (!isGeneric) return prev;
+      const label   = question.length > 40 ? question.slice(0, 40) + "…" : question;
+      const updated = prev.map(s => s.id === activeSessionId ? { ...s, label } : s);
+      saveStoredSessions(updated);
+      return updated;
+    });
 
     try {
       const stream = streamChat(question, activeSessionId, model);
@@ -313,10 +366,7 @@ export default function ChatPage() {
 
         if (type === "tool_start") {
           setMessages(prev => prev.map(m =>
-            m.id !== aiId ? m : {
-              ...m,
-              activeTools: [...(m.activeTools ?? []), event.tool as string],
-            }
+            m.id !== aiId ? m : { ...m, activeTools: [...(m.activeTools ?? []), event.tool as string] }
           ));
         } else if (type === "tool_end") {
           setMessages(prev => prev.map(m => {
@@ -325,10 +375,7 @@ export default function ChatPage() {
             return {
               ...m,
               activeTools: active.slice(0, -1),
-              toolCalls: [
-                ...(m.toolCalls ?? []),
-                { tool: active[active.length - 1] ?? "unknown", input: {} },
-              ],
+              toolCalls:   [...(m.toolCalls ?? []), { tool: active[active.length - 1] ?? "unknown", input: {} }],
             };
           }));
         } else if (type === "done") {
@@ -343,36 +390,18 @@ export default function ChatPage() {
               m.id !== aiId ? m : { ...m, content: words.slice(0, i + 1).join(" ") }
             ));
           }
-
           setMessages(prev => prev.map(m =>
-            m.id !== aiId ? m : {
-              ...m,
-              content:     answer,
-              isStreaming: false,
-              activeTools: [],
-              toolCalls,
-              sources,
-            }
+            m.id !== aiId ? m : { ...m, content: answer, isStreaming: false, activeTools: [], toolCalls, sources }
           ));
         } else if (type === "error") {
           setMessages(prev => prev.map(m =>
-            m.id !== aiId ? m : {
-              ...m,
-              content:     `Error: ${event.message as string}`,
-              isStreaming: false,
-              activeTools: [],
-            }
+            m.id !== aiId ? m : { ...m, content: `Error: ${event.message as string}`, isStreaming: false, activeTools: [] }
           ));
         }
       }
     } catch (err) {
       setMessages(prev => prev.map(m =>
-        m.id !== aiId ? m : {
-          ...m,
-          content:     `Connection error: ${(err as Error).message}`,
-          isStreaming: false,
-          activeTools: [],
-        }
+        m.id !== aiId ? m : { ...m, content: `Connection error: ${(err as Error).message}`, isStreaming: false, activeTools: [] }
       ));
     } finally {
       setIsStreaming(false);
@@ -388,6 +417,8 @@ export default function ChatPage() {
     }
   }
 
+  const activeSession = sessions.find(s => s.id === activeSessionId);
+
   // ── Render ───────────────────────────────────────────────────────────────
 
   return (
@@ -397,14 +428,11 @@ export default function ChatPage() {
         {/* Sidebar */}
         <aside className="w-56 bg-white border-r border-gray-100 flex flex-col">
           <div className="px-4 py-4 border-b border-gray-100">
-            <h1 className="text-sm font-semibold text-gray-900 leading-tight">
-              Financial Intelligence
-            </h1>
+            <h1 className="text-sm font-semibold text-gray-900 leading-tight">Financial Intelligence</h1>
             <p className="text-xs text-gray-400 mt-0.5">Regulatory Agent</p>
           </div>
 
-          {/* Sessions list */}
-          <div className="flex-1 overflow-y-auto py-2 px-2 scrollbar-thin flex flex-col gap-0.5">
+          <div className="flex-1 overflow-y-auto py-2 px-2 flex flex-col gap-0.5">
             {sessions.map(s => (
               <SessionRow
                 key={s.id}
@@ -416,61 +444,39 @@ export default function ChatPage() {
             ))}
           </div>
 
-          {/* Sidebar actions */}
           <div className="px-3 pb-4 flex flex-col gap-0.5 border-t border-gray-100 pt-3">
-            <button
-              onClick={newSession}
-              className="w-full text-left px-3 py-1.5 text-sm text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-            >
-              + New session
+            <button onClick={newSession} className="w-full text-left px-3 py-1.5 text-sm text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
+              + New chat
             </button>
-
-            {/* PDF ingest button */}
-            <button
-              onClick={() => setShowIngest(true)}
-              className="w-full text-left px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50 rounded-lg transition-colors flex items-center gap-2"
-            >
+            <button onClick={() => setShowIngest(true)} className="w-full text-left px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50 rounded-lg transition-colors flex items-center gap-2">
               <span>Upload PDF</span>
-              <span className="text-xs bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded font-medium">
-                new
-              </span>
+              <span className="text-xs bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded font-medium">new</span>
             </button>
-
-            <button
-              onClick={handleClearSession}
-              className="w-full text-left px-3 py-1.5 text-sm text-gray-500 hover:bg-gray-50 rounded-lg transition-colors"
-            >
-              Clear session
+            <button onClick={handleClearSession} className="w-full text-left px-3 py-1.5 text-sm text-gray-500 hover:bg-gray-50 rounded-lg transition-colors">
+              Clear chat
             </button>
-            <button
-              onClick={handleLogout}
-              className="w-full text-left px-3 py-1.5 text-sm text-gray-400 hover:bg-gray-50 rounded-lg transition-colors"
-            >
+            <button onClick={handleLogout} className="w-full text-left px-3 py-1.5 text-sm text-gray-400 hover:bg-gray-50 rounded-lg transition-colors">
               Sign out
             </button>
           </div>
         </aside>
 
-        {/* Main area */}
+        {/* Main */}
         <main className="flex-1 flex flex-col overflow-hidden">
-
           <header className="bg-white border-b border-gray-100 px-6 py-3 flex items-center justify-between">
-            <div className="text-sm text-gray-500">
-              Session:{" "}
-              <span className="font-medium text-gray-800">
-                {sessions.find(s => s.id === activeSessionId)?.label ?? activeSessionId}
-              </span>
+            <div className="text-sm text-gray-500 truncate max-w-xs">
+              {historyLoading
+                ? <span className="text-gray-400 italic text-xs">Loading history…</span>
+                : <span className="font-medium text-gray-800">{activeSession?.label ?? "Chat"}</span>
+              }
             </div>
-
             <div className="flex items-center gap-1.5 bg-gray-50 rounded-lg p-1 border border-gray-200">
               {(["gemini-2.5-flash", "gemini-2.5-pro"] as ModelType[]).map(m => (
                 <button
                   key={m}
                   onClick={() => setModel(m)}
                   className={`px-3 py-1 text-xs rounded-md transition-colors font-medium ${
-                    model === m
-                      ? "bg-white text-blue-700 border border-blue-200"
-                      : "text-gray-500 hover:text-gray-700"
+                    model === m ? "bg-white text-blue-700 border border-blue-200" : "text-gray-500 hover:text-gray-700"
                   }`}
                 >
                   {m === "gemini-2.5-flash" ? "Flash" : "Pro"}
@@ -479,12 +485,14 @@ export default function ChatPage() {
             </div>
           </header>
 
-          <div className="flex-1 overflow-y-auto px-6 py-6 scrollbar-thin">
-            {messages.length === 0 && (
+          <div className="flex-1 overflow-y-auto px-6 py-6">
+            {historyLoading ? (
+              <div className="flex items-center justify-center h-full text-sm text-gray-400">
+                Loading conversation…
+              </div>
+            ) : messages.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-full text-center">
-                <p className="text-gray-400 text-sm mb-4">
-                  Ask about financials, SEBI rules, or compare companies.
-                </p>
+                <p className="text-gray-400 text-sm mb-4">Ask about financials, SEBI rules, or compare companies.</p>
                 <div className="flex flex-col gap-2 w-full max-w-lg">
                   {[
                     "Is GreenHorizon eligible for SEBI institutional investment?",
@@ -501,13 +509,11 @@ export default function ChatPage() {
                   ))}
                 </div>
               </div>
+            ) : (
+              <div className="flex flex-col gap-4 max-w-3xl mx-auto">
+                {messages.map(msg => <MessageBubble key={msg.id} msg={msg} />)}
+              </div>
             )}
-
-            <div className="flex flex-col gap-4 max-w-3xl mx-auto">
-              {messages.map(msg => (
-                <MessageBubble key={msg.id} msg={msg} />
-              ))}
-            </div>
             <div ref={bottomRef} />
           </div>
 
@@ -520,7 +526,7 @@ export default function ChatPage() {
                 onChange={e => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
                 placeholder="Ask a question… (Enter to send, Shift+Enter for new line)"
-                disabled={isStreaming}
+                disabled={isStreaming || historyLoading}
                 className="flex-1 resize-none border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-gray-50 disabled:opacity-50 max-h-32 leading-relaxed"
                 style={{ height: "42px" }}
                 onInput={e => {
@@ -531,7 +537,7 @@ export default function ChatPage() {
               />
               <button
                 onClick={() => { sendMessage(input); setInput(""); }}
-                disabled={isStreaming || !input.trim()}
+                disabled={isStreaming || !input.trim() || historyLoading}
                 className="px-4 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-xl hover:bg-blue-700 disabled:opacity-40 transition-colors"
               >
                 {isStreaming ? "…" : "Send"}
@@ -540,25 +546,15 @@ export default function ChatPage() {
             <p className="text-xs text-gray-400 text-center mt-2">
               Using <span className="font-medium">{model}</span>
               {" · "}
-              <button onClick={handleClearSession} className="hover:text-gray-600">
-                clear session
-              </button>
+              <button onClick={handleClearSession} className="hover:text-gray-600">clear chat</button>
               {" · "}
-              <button
-                onClick={() => setShowIngest(true)}
-                className="hover:text-gray-600"
-              >
-                upload PDF
-              </button>
+              <button onClick={() => setShowIngest(true)} className="hover:text-gray-600">upload PDF</button>
             </p>
           </div>
         </main>
       </div>
 
-      {/* PDF ingest modal — rendered outside the layout so it overlays everything */}
-      {showIngest && (
-        <PDFIngestModal onClose={() => setShowIngest(false)} />
-      )}
+      {showIngest && <PDFIngestModal onClose={() => setShowIngest(false)} />}
     </>
   );
 }

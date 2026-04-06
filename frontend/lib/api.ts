@@ -201,3 +201,62 @@ export async function deleteDocument(docUuid: string): Promise<void> {
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
 }
 
+export async function register(
+  username: string,
+  password: string,
+  email: string,
+): Promise<void> {
+  const res = await fetch(`${BASE}/api/auth/register/`, {
+    method:  "POST",
+    headers: { "Content-Type": "application/json" },
+    body:    JSON.stringify({ username, password, email }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+}
+
+export async function fetchSessionHistory(sessionId: string): Promise<Array<{ role: "human" | "ai"; content: string }>> {
+  const token = getToken();
+  const res = await fetch(
+    `${BASE}/api/chat/history/?session_id=${encodeURIComponent(sessionId)}`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+
+  if (!res.ok) return [];
+
+  const data = await res.json();
+  return data.messages ?? [];
+}
+
+// Session list persistence — stored in localStorage so it
+// survives logout/login cycles
+const SESSION_STORE_KEY = "rag_sessions";
+
+export function loadStoredSessions(): Array<{ id: string; label: string }> {
+  try {
+    const raw = localStorage.getItem(SESSION_STORE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveStoredSessions(
+  sessions: Array<{ id: string; label: string }>,
+): void {
+  try {
+    localStorage.setItem(SESSION_STORE_KEY, JSON.stringify(sessions));
+  } catch {
+    // localStorage quota exceeded — fail silently
+  }
+}
+
+export function clearStoredSessions(): void {
+  try {
+    localStorage.removeItem(SESSION_STORE_KEY);
+  } catch {
+    // ignore
+  }
+}

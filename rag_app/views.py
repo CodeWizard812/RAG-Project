@@ -6,7 +6,8 @@ import queue
 import threading
 from django.http import StreamingHttpResponse
 from langchain_classic.callbacks.base import BaseCallbackHandler
-
+from django.contrib.auth.models import User
+from rest_framework.permissions import AllowAny
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
@@ -418,3 +419,48 @@ class StreamingChatView(APIView):
         response["Cache-Control"]     = "no-cache"
         response["X-Accel-Buffering"] = "no"
         return response
+    
+
+class RegisterView(APIView):
+    """
+    POST /api/auth/register/
+    Public endpoint — no token required.
+    Creates a new active (non-superuser) user.
+
+    Body: { "username": "...", "password": "...", "email": "..." }
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        username = request.data.get("username", "").strip()
+        password = request.data.get("password", "")
+        email    = request.data.get("email", "").strip()
+
+        if not username or not password:
+            return Response(
+                {"error": "username and password are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if len(password) < 8:
+            return Response(
+                {"error": "password must be at least 8 characters."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if User.objects.filter(username=username).exists():
+            return Response(
+                {"error": "username already taken."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        user = User.objects.create_user(
+            username=username,
+            password=password,
+            email=email,
+            is_staff=False,
+            is_superuser=False,
+        )
+        logger.info(f"[RegisterView] New user created: {username}")
+        return Response(
+            {"status": "registered", "username": user.username},
+            status=status.HTTP_201_CREATED,
+        )
