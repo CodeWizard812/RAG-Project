@@ -26,4 +26,5 @@ export interface Session {
   label: string;
 }
 
-export type ModelType = "gemini-2.5-flash" | "gemini-2.5-pro";
+ //"gemini-2.5-flash" | "gemini-2.5-pro";
+export type ModelType = "gemini-2.5-flash";

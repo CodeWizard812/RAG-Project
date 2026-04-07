@@ -10,7 +10,7 @@
 [![Gemini](https://img.shields.io/badge/Gemini-2.5-4285F4?style=flat-square&logo=google&logoColor=white)](https://ai.google.dev/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](LICENSE)
 
-[Live Demo](https://finintel-agent.vercel.app) · [Backend API](https://finintel-backend.onrender.com/api/health/) · [Report a Bug](https://github.com/CodeWizard812/RAG-Project/issues)
+[Live Demo](https://rag-project-beta.vercel.app/) · [Backend API](https://rag-backend-sd88.onrender.com/api/health/) · [Report a Bug](https://github.com/CodeWizard812/RAG-Project/issues)
 
 </div>
 
@@ -69,13 +69,14 @@ A RAGAS evaluation pipeline scores the agent on **faithfulness**, **answer relev
 |---|---|
 | **Frontend** | Next.js 15, TypeScript, Tailwind CSS, React Markdown |
 | **Backend** | Django 5, Django REST Framework, Gunicorn, WhiteNoise |
-| **AI / LLM** | LangChain 0.3, Google Gemini 2.5 Flash / Pro, `text-embedding-004` |
+| **AI / LLM** | LangChain 0.3, Google Gemini 2.5 Flash / Pro, `gemini-embedding-001` |
 | **Vector Store** | ChromaDB 0.5 (persistent, embedded) |
 | **Relational DB** | PostgreSQL (Neon serverless in production) |
 | **Session Cache** | Redis (Upstash serverless in production) |
 | **Auth** | JWT via `djangorestframework-simplejwt` |
 | **Evaluation** | RAGAS, Hugging Face Datasets |
 | **Containerisation** | Docker, Docker Compose |
+| **Ping Service** | UptimeRobot(Keeps Render Active) |
 | **Deployment** | Render (backend), Vercel (frontend) |
 
 ---
@@ -297,8 +298,8 @@ CHROMA_PATH        → /opt/render/project/src/chroma_store
 LLM_MODEL_TYPE     → gemini-2.5-flash
 GEMINI_API_KEY_1   → your first Gemini key
 GEMINI_API_KEY_2   → your second Gemini key
-ALLOWED_HOSTS      → your-app.onrender.com
-CORS_ALLOWED_ORIGINS → https://your-app.vercel.app
+ALLOWED_HOSTS      → https://rag-backend-sd88.onrender.com
+CORS_ALLOWED_ORIGINS → https://rag-project-beta.vercel.app/
 DJANGO_SUPERUSER_USERNAME → admin
 DJANGO_SUPERUSER_PASSWORD → (strong password)
 ```
@@ -308,7 +309,7 @@ DJANGO_SUPERUSER_PASSWORD → (strong password)
 1. Import the repository on [vercel.com](https://vercel.com)
 2. Set **Root Directory** to `frontend`
 3. Framework: Next.js (auto-detected)
-4. Add environment variable: `NEXT_PUBLIC_API_URL=https://your-backend.onrender.com`
+4. Add environment variable: `NEXT_PUBLIC_API_URL=https://rag-backend-sd88.onrender.com`
 
 ### Keeping the Server Warm (Cold Start Prevention)
 
@@ -319,9 +320,9 @@ Render's free tier spins down services after 15 minutes of inactivity, causing a
 1. Create a free account at [uptimerobot.com](https://uptimerobot.com)
 2. Add a new monitor:
    - **Type:** HTTP(s)
-   - **URL:** `https://your-backend.onrender.com/api/health/`
-   - **Interval:** Every 12 minutes
-3. UptimeRobot pings the public `/api/health/` endpoint every 12 minutes, keeping the Render dyno active continuously
+   - **URL:** `https://rag-backend-sd88.onrender.com/api/health/`
+   - **Interval:** Every 14 minutes
+3. UptimeRobot pings the public `/api/health/` endpoint every 14 minutes, keeping the Render dyno active continuously
 
 The `/api/health/` endpoint is `AllowAny` (no authentication required) and returns a lightweight JSON response confirming PostgreSQL, ChromaDB, and the Gemini key pool status — making it an ideal ping target.
 

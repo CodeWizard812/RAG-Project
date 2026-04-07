@@ -368,7 +368,7 @@ export default function ChatPage() {
         await loadHistory(updated[0].id);
       } else {
         const newId  = uid();
-        const fresh  = [{ id: newId, label: "Chat 1" }];
+        const fresh  = [{ id: newId, label: "New Chat" }];
         setSessions(fresh);
         saveStoredSessions(fresh);
         setActiveSessionId(newId);
