@@ -3,13 +3,12 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { login, register, setToken, getToken, loadStoredSessions } from "@/lib/api";
+import { login, register, setToken, getToken } from "@/lib/api";
 
 type FormMode = "login" | "register";
 
 export default function LoginPage() {
   const router = useRouter();
-
   const [mode,     setMode]    = useState<FormMode>("login");
   const [username, setUsername]= useState("");
   const [password, setPassword]= useState("");
@@ -18,7 +17,6 @@ export default function LoginPage() {
   const [success,  setSuccess] = useState("");
   const [loading,  setLoading] = useState(false);
 
-  // If already logged in, go straight to chat
   useEffect(() => {
     if (getToken()) router.replace("/chat");
   }, [router]);
@@ -26,7 +24,6 @@ export default function LoginPage() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(""); setSuccess(""); setLoading(true);
-
     try {
       if (mode === "register") {
         await register(username, password, email);
@@ -47,25 +44,6 @@ export default function LoginPage() {
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 px-4">
-
-      {/* Cold start notice */}
-      <div className="w-full max-w-sm mb-4 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
-        <div className="flex gap-2 items-start">
-          <span className="text-amber-500 mt-0.5 text-sm">⚠</span>
-          <div>
-            <p className="text-sm font-medium text-amber-800">
-              First load may take ~60 seconds
-            </p>
-            <p className="text-xs text-amber-700 mt-0.5 leading-relaxed">
-              This app runs on Render&apos;s free tier which spins down after
-              15 minutes of inactivity. If the login is slow, the server is
-              waking up — please wait and try again.
-            </p>
-          </div>
-        </div>
-      </div>
-
-      {/* Auth card */}
       <div className="bg-white border border-gray-200 rounded-xl p-8 w-full max-w-sm">
         <h1 className="text-lg font-semibold text-gray-900 mb-1">
           Financial Intelligence Agent
@@ -105,7 +83,6 @@ export default function LoginPage() {
             required
             autoComplete={mode === "register" ? "new-password" : "current-password"}
           />
-
           {error && (
             <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
               {error}
@@ -131,25 +108,13 @@ export default function LoginPage() {
         {/* Toggle mode */}
         <p className="text-xs text-gray-400 text-center mt-4">
           {mode === "login" ? (
-            <>
-              No account?{" "}
-              <button
-                onClick={() => { setMode("register"); setError(""); setSuccess(""); }}
-                className="text-blue-600 hover:underline"
-              >
-                Register
-              </button>
-            </>
+            <>No account?{" "}
+              <button onClick={() => { setMode("register"); setError(""); setSuccess(""); }}
+                className="text-blue-600 hover:underline">Register</button></>
           ) : (
-            <>
-              Already have an account?{" "}
-              <button
-                onClick={() => { setMode("login"); setError(""); setSuccess(""); }}
-                className="text-blue-600 hover:underline"
-              >
-                Sign in
-              </button>
-            </>
+            <>Already have an account?{" "}
+              <button onClick={() => { setMode("login"); setError(""); setSuccess(""); }}
+                className="text-blue-600 hover:underline">Sign in</button></>
           )}
         </p>
       </div>

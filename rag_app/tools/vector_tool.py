@@ -1,52 +1,75 @@
 import os
 import logging
 import chromadb
-# from chromadb.utils import embedding_functions
 from pydantic import BaseModel, Field
-from langchain_core.tools import StructuredTool
+from langchain.tools import StructuredTool
 from dotenv import load_dotenv
-from rag_app.utils.embeddings import GeminiEmbeddingFunction 
+from rag_app.utils.embeddings import GeminiEmbeddingFunction
 
 load_dotenv()
-logger = logging.getLogger(__name__)
-
-CHROMA_PATH     = "./chroma_store"
+logger          = logging.getLogger(__name__)
+CHROMA_PATH     = os.getenv("CHROMA_PATH", "./chroma_store")
 COLLECTION_NAME = "financial_regulatory_kb"
-#EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 TOP_K_RESULTS   = 3
 
-
-class VectorQueryInput(BaseModel):
-    """
-    Explicit input schema — locks parameter name to 'query' so Gemini
-    never invents arbitrary names.
-    """
-    query: str = Field(description="Natural language question about regulations or strategy.")
+# Module-level singleton so the collection object is reused across
+# requests — avoids re-opening the ChromaDB client on every query
+_collection = None
 
 
 def _get_collection():
-    client = chromadb.PersistentClient(path=CHROMA_PATH)
-    ef = GeminiEmbeddingFunction() 
-    return client.get_or_create_collection(
-        name=COLLECTION_NAME,
-        embedding_function=ef,
-        metadata={"hnsw:space": "cosine"},
+    global _collection
+    if _collection is None:
+        client      = chromadb.PersistentClient(path=CHROMA_PATH)
+        ef          = GeminiEmbeddingFunction()
+        _collection = client.get_or_create_collection(
+            name=COLLECTION_NAME,
+            embedding_function=ef,
+            metadata={"hnsw:space": "cosine"},
+        )
+        logger.info(
+            f"[VectorTool] Collection opened: {COLLECTION_NAME} "
+            f"({_collection.count()} docs)"
+        )
+    return _collection
+
+
+def refresh_collection():
+    """
+    Called after a PDF is ingested to force the singleton to re-read
+    the collection from disk, picking up the newly added chunks.
+    """
+    global _collection
+    _collection = None
+    logger.info("[VectorTool] Collection cache cleared — will reload on next query.")
+
+
+class VectorQueryInput(BaseModel):
+    query: str = Field(
+        description=(
+            "Natural language question about regulations, strategy, earnings, "
+            "or any document uploaded by the user."
+        )
     )
 
 
 def get_vector_tool() -> StructuredTool:
     """
     Returns a StructuredTool that performs cosine-similarity search over
-    the ChromaDB financial & regulatory knowledge base.
-    Returns the top 3 relevant document snippets as a formatted string.
+    the ChromaDB knowledge base, which includes both seeded regulatory
+    documents and any PDFs uploaded by the user.
     """
-
     def search_knowledge_base(query: str) -> str:
         try:
-            collection = _get_collection()
-            results = collection.query(
+            col   = _get_collection()
+            count = col.count()
+
+            if count == 0:
+                return "The knowledge base is empty. No documents have been seeded or uploaded."
+
+            results = col.query(
                 query_texts=[query],
-                n_results=TOP_K_RESULTS,
+                n_results=min(TOP_K_RESULTS, count),
                 include=["documents", "metadatas", "distances"],
             )
 
@@ -62,8 +85,8 @@ def get_vector_tool() -> StructuredTool:
                 zip(documents, metadatas, distances), start=1
             ):
                 similarity_pct = round((1 - dist) * 100, 1)
-                source   = meta.get("source", "Unknown Source")
-                category = meta.get("category", "Unknown Category")
+                source   = meta.get("source",        "Unknown Source")
+                category = meta.get("category",      "Unknown Category")
                 doc_type = meta.get("document_type", "")
 
                 header = (
@@ -77,19 +100,18 @@ def get_vector_tool() -> StructuredTool:
             return "\n\n" + separator.join(snippets)
 
         except Exception as e:
-            logger.exception("[Vector Tool] Error during similarity search")
+            logger.exception("[VectorTool] Error during similarity search")
             return f"Vector tool error: {str(e)}"
 
     return StructuredTool.from_function(
         func=search_knowledge_base,
         name="regulatory_knowledge_search",
         description=(
-            "Use this tool for qualitative analysis: SEBI regulatory guidelines, "
-            "disclosure requirements, ESG mandates, and insights from earnings transcripts "
-            "(strategic pivots, management commentary, forward guidance). "
-            "Examples: 'What are SEBI D/E limits for tech companies?', "
-            "'What did Aether Technologies say about their AI strategy?', "
-            "'What ESG disclosures are required for large-cap companies?'"
+            "Use this tool to search ALL qualitative content: SEBI regulatory guidelines, "
+            "disclosure requirements, ESG mandates, earnings transcripts, and any PDF "
+            "documents uploaded by the user. This is the correct tool whenever the user "
+            "asks about an uploaded document, a filing, an annual report, or any "
+            "non-numerical content. Input should be a natural language question."
         ),
         args_schema=VectorQueryInput,
     )

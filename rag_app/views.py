@@ -228,6 +228,9 @@ class IngestView(APIView):
                 document_type = doc_type,
                 extra_metadata= extra,
             )
+
+            from rag_app.tools.vector_tool import refresh_collection
+            refresh_collection()
         except ValueError as e:
             return Response({"error": str(e)}, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
         except Exception as e:
