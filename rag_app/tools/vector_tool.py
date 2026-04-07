@@ -2,7 +2,7 @@ import os
 import logging
 import chromadb
 from pydantic import BaseModel, Field
-from langchain.tools import StructuredTool
+from langchain_core.tools import StructuredTool
 from dotenv import load_dotenv
 from rag_app.utils.embeddings import GeminiEmbeddingFunction
 
