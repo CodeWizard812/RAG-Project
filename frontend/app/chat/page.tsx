@@ -565,9 +565,9 @@ export default function ChatPage() {
               }
             </div>
 
-            {/* Model switcher */}
+            {/* Model switcher - Updated to only show Flash */}
             <div className="flex items-center gap-1 bg-gray-50 rounded-lg p-1 border border-gray-200 shrink-0">
-              {(["gemini-2.5-flash", "gemini-2.5-pro"] as ModelType[]).map(m => (
+              {(["gemini-2.5-flash"] as ModelType[]).map(m => (
                 <button
                   key={m}
                   onClick={() => setModel(m)}
@@ -577,7 +577,7 @@ export default function ChatPage() {
                       : "text-gray-500 hover:text-gray-700"
                   }`}
                 >
-                  {m === "gemini-2.5-flash" ? "Flash" : "Pro"}
+                  Flash
                 </button>
               ))}
             </div>
