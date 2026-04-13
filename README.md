@@ -535,11 +535,6 @@ Four regulatory documents are pre-seeded in ChromaDB:
 
 ---
 
-## License
-
-This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
-
----
 
 <div align="center">
   Built by <a href="https://github.com/CodeWizard812">CodeWizard812</a>
